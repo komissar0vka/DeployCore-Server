@@ -59,6 +59,15 @@ def exercise_execution(check, login, sql, base, context, version_id, admin):
     fetch(1, target, attempt, 404)
     fetch(0, target, str(uuid.uuid4()), 409)
     suffix = "?attempt_id=" + attempt
+    sql(f"UPDATE deployment_jobs SET artifact_sha256 = repeat('0', 64) WHERE id = '{created["id"]}';")
+    agent(0, target + "/manifest" + suffix, method="GET", expected=409)
+    fetch(0, target, attempt, 409)
+    agent(0, target + "/start", data=proof, expected=409)
+    sql(f"""
+        UPDATE deployment_jobs SET artifact_sha256 = package_artifacts.sha256
+        FROM package_artifacts
+        WHERE deployment_jobs.id = '{created["id"]}' AND package_artifacts.version_id = deployment_jobs.version_id;
+    """)
     manifest = agent(0, target + "/manifest" + suffix, method="GET")
     image, headers = fetch(0, target, attempt, 200)
     assert headers["X-DeployCore-SHA256"] == manifest["sha256"] == hashlib.sha256(image).hexdigest()

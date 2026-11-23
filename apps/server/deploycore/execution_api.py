@@ -10,7 +10,7 @@ from .device_api import AgentDevice
 from .job_api import ACTIVE, LEASE, attempt_for, clock, event, execution_enabled, get_view, last_attempt
 from .job_models import DeploymentJob as Job, DeploymentTarget as Target
 from .models import User
-from .package_models import PackageArtifact, PackageDetectionRule, SoftwarePackage, SoftwareVersion
+from .package_models import PackageArtifact, PackageDetectionRule, SoftwarePackage, SoftwareVersion, artifact_approved
 from .package_storage import artifact_path
 from .security import Db, Permission, audit, require
 
@@ -40,9 +40,11 @@ def permitted(db, device, target_id, attempt_id):
             or attempt.lease_expires_at <= now or attempt.started_at is not None):
         raise HTTPException(409, "deployment_execution_not_permitted")
     version = db.get_one(SoftwareVersion, job.version_id)
-    package = db.get_one(SoftwarePackage, version.package_id)
+    package = db.get_one(SoftwarePackage, version.package_id, with_for_update={"read": True})
+    version = db.get_one(SoftwareVersion, version.id, with_for_update={"read": True}, populate_existing=True)
     artifact = db.get(PackageArtifact, version.id)
-    if package.archived_at is not None or version.approved_at is None or artifact is None or artifact.signature != "verified":
+    if (package.archived_at is not None or not artifact_approved(version, artifact)
+            or job.artifact_sha256 != artifact.sha256):
         raise HTTPException(409, "deployment_version_unavailable")
     return target, attempt, job, version, artifact, now
 

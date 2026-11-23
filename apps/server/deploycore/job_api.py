@@ -12,7 +12,7 @@ from .device_api import AgentDevice
 from .device_models import Agent, Device
 from .job_models import DeploymentAttempt as Attempt, DeploymentEvent as Event, DeploymentJob as Job, DeploymentTarget as Target
 from .models import User
-from .package_models import PackageArtifact, PackageDetectionRule, SoftwarePackage, SoftwareVersion
+from .package_models import PackageArtifact, PackageDetectionRule, SoftwarePackage, SoftwareVersion, artifact_approved
 from .package_storage import artifact_path
 from .security import PERMISSIONS, Db, Permission, Role, audit, require
 
@@ -114,22 +114,24 @@ def create_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) -
         db.commit()
         return result
 
-    row = db.execute(
-        select(SoftwareVersion, SoftwarePackage).join(SoftwarePackage, SoftwarePackage.id == SoftwareVersion.package_id)
+    package = db.scalar(
+        select(SoftwarePackage).join(SoftwareVersion, SoftwareVersion.package_id == SoftwarePackage.id)
         .where(SoftwareVersion.id == data.version_id).with_for_update(of=SoftwarePackage)
-    ).one_or_none()
+    )
+    if package is None or package.archived_at is not None:
+        raise HTTPException(409, "deployment_version_unavailable")
+    version = db.get_one(SoftwareVersion, data.version_id, with_for_update={"read": True}, populate_existing=True)
     artifact = db.get(PackageArtifact, data.version_id)
-    if (row is None or row[1].archived_at is not None or row[0].approved_at is None
-            or artifact is None or artifact.signature != "verified"):
+    if not artifact_approved(version, artifact):
         raise HTTPException(409, "deployment_version_unavailable")
     if not artifact_path(data.version_id).is_file():
         raise HTTPException(503, "package_storage_unavailable")
-    if data.operation == "uninstall" and row[0].uninstall_args is None:
+    if data.operation == "uninstall" and version.uninstall_args is None:
         raise HTTPException(409, "deployment_uninstall_unavailable")
     if data.mode == "execute_v1":
         if not execution_enabled():
             raise HTTPException(409, "deployment_execution_disabled")
-        validate_execution(row[0], db.get_one(PackageDetectionRule, data.version_id), data.operation)
+        validate_execution(version, db.get_one(PackageDetectionRule, data.version_id), data.operation)
     devices = list(db.execute(
         select(Device.id, Device.agent_version).join(Agent, Agent.device_id == Device.id)
         .where(Device.id.in_(data.device_ids), Device.deleted_at.is_(None), Agent.revoked_at.is_(None))
@@ -137,10 +139,11 @@ def create_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) -
     if len(devices) != len(data.device_ids):
         raise HTTPException(422, "deployment_devices_unavailable")
 
-    if data.mode == "execute_v1" and not all(supports_execution(version) for _, version in devices):
+    if data.mode == "execute_v1" and not all(supports_execution(agent_version) for _, agent_version in devices):
         raise HTTPException(422, "deployment_agent_incompatible")
 
-    job = Job(version_id=data.version_id, operation=data.operation, created_by=actor.id, request_id=data.request_id, mode=data.mode)
+    job = Job(version_id=data.version_id, artifact_sha256=artifact.sha256, operation=data.operation,
+              created_by=actor.id, request_id=data.request_id, mode=data.mode)
     db.add(job)
     db.flush()
     db.add_all(Target(job_id=job.id, device_id=device_id) for device_id, _ in devices)
@@ -148,7 +151,7 @@ def create_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) -
     audit(db, request, "deployment_created", actor=actor,
           details={"job_id": str(job.id), "version_id": str(job.version_id), "operation": job.operation,
                    "target_count": str(len(devices)), "mode": data.mode})
-    result = view(job, row[0].version, row[1].name, {"queued": len(devices)})
+    result = view(job, version.version, package.name, {"queued": len(devices)})
     db.commit()
     return result
 

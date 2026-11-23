@@ -50,7 +50,7 @@ test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT
     -c "UPDATE installation_settings SET instance_name='Pre-catalog instance' WHERE id=1"
 "${compose[@]}" up -d --no-build --wait --wait-timeout 120
 test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT instance_name FROM installation_settings WHERE id=1")" = 'Pre-catalog instance'
-test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT version_num FROM alembic_version")" = '0005_execution'
+test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT version_num FROM alembic_version")" = '0006_manual_approval'
 echo 'Upgrade from 0002 preserved existing settings'
 
 request --fail "$base/" > "$scratch/index.html"

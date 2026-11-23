@@ -23,6 +23,8 @@ export function errorMessage(error: unknown, t: Translate) {
     package_duplicate: t('Запись с таким названием или версией уже существует.', 'A package or version with this identity already exists.'),
     package_artifact_immutable: t('Файл уже сохранён. Для замены создайте версию.', 'This file is already stored. Create a version to replace it.'),
     package_signature_required: t('Для утверждения нужна проверенная подпись Authenticode.', 'Approval requires a verified Authenticode signature.'),
+    package_manual_approval_unavailable: t('Ручное утверждение доступно для загруженного файла с неподтверждённой подписью.', 'Manual approval requires an uploaded file with an unverified signature.'),
+    package_approval_hash_mismatch: t('SHA-256 не совпадает с текущим файлом. Обновите карточку и проверьте файл.', 'The SHA-256 differs from the current file. Refresh the version and check the file.'),
     package_architecture_mismatch: t('Архитектура файла отличается от указанной.', 'The installer architecture does not match.'),
     package_invalid_format: t('Файл не соответствует формату MSI или EXE.', 'The file does not match the MSI or EXE format.'),
     package_too_large: t('Файл превышает допустимый размер.', 'The file exceeds the size limit.'),

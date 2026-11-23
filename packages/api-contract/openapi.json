@@ -1562,6 +1562,74 @@
         }
       }
     },
+    "/api/v1/packages/{package_id}/versions/{version_id}/approve-manual": {
+      "post": {
+        "tags": [
+          "Packages"
+        ],
+        "summary": "Approve Manual",
+        "operationId": "approve_manual_api_v1_packages__package_id__versions__version_id__approve_manual_post",
+        "security": [
+          {
+            "DeployCoreSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "package_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Package Id"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualApproval"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/deployments": {
       "post": {
         "tags": [
@@ -3670,6 +3738,21 @@
         ],
         "title": "Manifest"
       },
+      "ManualApproval": {
+        "properties": {
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{64}$",
+            "title": "Sha256"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sha256"
+        ],
+        "title": "ManualApproval"
+      },
       "OSInfo": {
         "properties": {
           "version": {
@@ -4910,6 +4993,32 @@
             ],
             "title": "Approved By"
           },
+          "approval_kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "authenticode",
+                  "manual"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Kind"
+          },
+          "approved_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved Sha256"
+          },
           "artifact": {
             "anyOf": [
               {
@@ -4931,6 +5040,8 @@
           "id",
           "approved_at",
           "approved_by",
+          "approval_kind",
+          "approved_sha256",
           "artifact"
         ],
         "title": "VersionView"

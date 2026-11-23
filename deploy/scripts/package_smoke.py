@@ -24,7 +24,7 @@ def exercise_packages(check, login, sql, compose, base, context, admin):
             "version": version, "architecture": architecture, "installer": installer,
             "detection": {"kind": "registry_software", "display_name": "Catalog test", "version": version},
             "install_args": ["/quiet"] if installer == "exe" else ["/qn"],
-            "uninstall_args": ["/remove"] if version == "2.0" else None, "success_codes": [0, 3010], "min_windows_build": 19045,
+            "uninstall_args": ["/remove"] if version in {"1.0", "2.0"} else None, "success_codes": [0, 3010], "min_windows_build": 19045,
             "timeout_seconds": 300, "reboot_required": True,
         })[1]
 
@@ -99,6 +99,16 @@ def exercise_packages(check, login, sql, compose, base, context, admin):
         downloaded, headers = request("/api/v1" + artifact_url, headers={"Cookie": operator_cookie})
         assert downloaded == exe.read_bytes() and headers["X-DeployCore-SHA256"] == record["sha256"]
         check(version_path + "/approve", {409}, method="POST", **operator)
+        manual_path = version_path + "/approve-manual"
+        confirmation = {"sha256": record["sha256"].upper()}
+        check(manual_path, {403}, method="POST", data=confirmation, **viewer)
+        check(manual_path, {403}, method="POST", data=confirmation, **operator)
+        check(manual_path, {422}, method="POST", data={"sha256": "not-a-hash"}, **admin)
+        check(manual_path, {409}, method="POST", data={"sha256": "0" * 64}, **admin)
+        manual = check(manual_path, {200}, method="POST", data=confirmation, **admin)[1]
+        assert manual["approval_kind"] == "manual" and manual["approved_sha256"] == record["sha256"]
+        assert manual["artifact"]["signature"] == "unverified"
+        assert check(manual_path, {200}, method="POST", data=confirmation, **admin)[1] == manual
 
         wrong_arch = create_version(path, "1.0", "exe", "x86")
         wrong_path = f'{path}/versions/{wrong_arch["id"]}/artifact'
@@ -124,7 +134,7 @@ def exercise_packages(check, login, sql, compose, base, context, admin):
         signed_version_path = f'{path}/versions/{signed["id"]}'
         assert upload(signed_version_path + "/artifact", "signed.exe", signed_path, 201)["signature"] == "verified"
         approval = check(signed_version_path + "/approve", {200}, method="POST", **operator)[1]
-        assert approval["approved_at"] and approval["approved_by"]
+        assert approval["approved_at"] and approval["approved_by"] and approval["approval_kind"] == "authenticode"
         assert check(signed_version_path + "/approve", {200}, method="POST", **operator)[1] == approval
         assert upload(signed_version_path + "/artifact", "signed.exe", b"replace", 409)["detail"] == "package_artifact_immutable"
 
@@ -147,7 +157,27 @@ def exercise_packages(check, login, sql, compose, base, context, admin):
     downloaded, _ = request("/api/v1" + artifact_url, headers={"Cookie": operator_cookie})
     assert hashlib.sha256(downloaded).hexdigest() == record["sha256"]
     exercise_deployments(check, login, sql, compose, signed["id"], admin)
-    exercise_execution(check, login, sql, base, context, signed["id"], admin)
+    assert stored[version["id"]] == manual
+    exercise_execution(check, login, sql, base, context, version["id"], admin)
+    sql(f"""
+        DO $$
+        BEGIN
+            IF (SELECT count(*) FROM audit_events
+                WHERE action = 'package_version_approved' AND actor_id = '{manual["approved_by"]}'
+                  AND details->>'version_id' = '{version["id"]}'
+                  AND details->>'approval_kind' = 'manual'
+                  AND details->>'sha256' = '{record["sha256"]}'
+                  AND details->>'approved_at' IS NOT NULL) <> 1 THEN
+                RAISE EXCEPTION 'Expected one manual approval audit event';
+            END IF;
+        END;
+        $$;
+    """)
+    sql(f"UPDATE package_artifacts SET sha256 = repeat('0', 64) WHERE version_id = '{version["id"]}';")
+    check(manual_path, {409}, method="POST", data=confirmation, **admin)
+    sql(f"UPDATE package_artifacts SET sha256 = '{record["sha256"]}' WHERE version_id = '{version["id"]}';")
+    invalidated = {entry["id"]: entry for entry in check(path, {200}, **viewer)[1]["versions"]}[version["id"]]
+    assert all(invalidated[key] is None for key in ("approved_at", "approved_by", "approval_kind", "approved_sha256"))
     check(path, {403}, method="DELETE", **viewer)
     check(path, {204}, method="DELETE", **operator)
     check(path, {404}, **viewer)

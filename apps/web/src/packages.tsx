@@ -24,7 +24,7 @@ interface VersionInput {
   success_codes: number[]
   reboot_required: boolean
 }
-interface Version extends VersionInput { id: string; approved_at: string | null; artifact: Artifact | null }
+interface Version extends VersionInput { id: string; approved_at: string | null; approval_kind: 'authenticode' | 'manual' | null; artifact: Artifact | null }
 interface Props { session: Session; t: Translate }
 const pageSize = 25
 
@@ -150,11 +150,37 @@ function UploadForm({ path, installer, csrf, t, uploaded }: {
   </form>
 }
 
+function ManualApprovalDialog({ artifact, close, save, pending, error, t }: {
+  artifact: Artifact; close: () => void; save: (sha256: string) => void; pending: boolean; error: unknown; t: Translate
+}) {
+  const [sha256, setSha256] = useState('')
+  const matches = sha256.trim().toLowerCase() === artifact.sha256
+  return <Dialog title={t('Утвердить версию вручную', 'Approve version manually')}
+    close={close} closeLabel={t('Закрыть', 'Close')}>
+    <form className="grid gap-3" onSubmit={event => {
+      event.preventDefault()
+      if (matches && !pending) save(sha256.trim())
+    }}>
+      <p className="text-sm">{t(
+        'Подпись не подтверждена. Проверьте источник файла и введите SHA-256, вычисленный по доверенной копии установщика.',
+        'The signature is unverified. Check the file source and enter the SHA-256 computed from a trusted copy of the installer.',
+      )}</p>
+      <span className="break-all text-sm">{artifact.filename}</span>
+      <code className="break-all text-xs">SHA-256 {artifact.sha256}</code>
+      <Field label={t('Подтвердите SHA-256', 'Confirm SHA-256')} name="sha256" value={sha256}
+        onChange={event => setSha256(event.target.value)} autoComplete="off" spellCheck={false} required />
+      <FormError message={error ? errorMessage(error, t) : null} />
+      <Action type="submit" disabled={!matches || pending}>{t('Утвердить вручную', 'Approve manually')}</Action>
+    </form>
+  </Dialog>
+}
+
 function ProductDetails({ id, back, session, t, deploy }: Props & { id: string; back: () => void; deploy: (preset: DeploymentPreset) => void }) {
   const client = useQueryClient()
   const path = '/packages/' + id
   const query = useQuery({ queryKey: ['package', id], queryFn: () => api<Product & { versions: Version[] }>(path) })
   const [modal, setModal] = useState<'edit' | 'version' | 'archive' | null>(null)
+  const [manual, setManual] = useState<{ version: string; artifact: Artifact } | null>(null)
   const writable = session.user.role !== 'viewer'
   const csrf = session.csrf_token
   function updated() {
@@ -169,6 +195,11 @@ function ProductDetails({ id, back, session, t, deploy }: Props & { id: string; 
     onSuccess: () => { void client.invalidateQueries({ queryKey: ['packages'] }); back() } })
   const approval = useMutation({ mutationFn: (version: string) => api<Version>(`${path}/versions/${version}/approve`, { method: 'POST', csrf }),
     onSuccess: updated })
+  const manualApproval = useMutation({
+    mutationFn: ({ version, sha256 }: { version: string; sha256: string }) =>
+      api<Version>(`${path}/versions/${version}/approve-manual`, { method: 'POST', body: { sha256 }, csrf }),
+    onSuccess: () => { updated(); setManual(null) },
+  })
   const product = query.data
 
   return <div className="grid gap-4">
@@ -189,7 +220,8 @@ function ProductDetails({ id, back, session, t, deploy }: Props & { id: string; 
           return <details key={version.id} className="rounded-xl border border-border px-3 py-2.5">
             <summary className="cursor-pointer text-sm"><strong>{version.version}</strong> · {version.installer.toUpperCase()} {version.architecture}
               <span className="ml-2"><StatusBadge tone={version.approved_at ? 'success' : 'neutral'}>
-                {version.approved_at ? t('Утверждена', 'Approved') : t('Черновик', 'Draft')}
+                {version.approval_kind === 'manual' ? t('Утверждена вручную', 'Manually approved')
+                  : version.approved_at ? t('Утверждена', 'Approved') : t('Черновик', 'Draft')}
               </StatusBadge></span>
             </summary>
             <div className="mt-3 grid min-w-0 gap-3">
@@ -216,6 +248,13 @@ function ProductDetails({ id, back, session, t, deploy }: Props & { id: string; 
                   </Action>}
                   {!version.approved_at && version.artifact.signature === 'verified' &&
                     <Action disabled={approval.isPending} onClick={() => approval.mutate(version.id)}>{t('Утвердить версию', 'Approve version')}</Action>}
+                  {!version.approved_at && version.artifact.signature === 'unverified' && session.user.role === 'super_admin' &&
+                    <Action onClick={() => {
+                      if (version.artifact) {
+                        manualApproval.reset()
+                        setManual({ version: version.id, artifact: version.artifact })
+                      }
+                    }}>{t('Утвердить вручную', 'Approve manually')}</Action>}
                 </div>}
               </div> : writable ? <UploadForm path={artifactPath} installer={version.installer} csrf={csrf} t={t} uploaded={updated} />
                 : <EmptyState title={t('Установщик ещё не загружен', 'No installer uploaded yet')} />}
@@ -224,6 +263,9 @@ function ProductDetails({ id, back, session, t, deploy }: Props & { id: string; 
         })}
       </div>
     </Panel>}
+    {manual && <ManualApprovalDialog artifact={manual.artifact} t={t} close={() => setManual(null)}
+      save={sha256 => manualApproval.mutate({ version: manual.version, sha256 })}
+      pending={manualApproval.isPending} error={manualApproval.error} />}
     {modal === 'edit' && product && <ProductDialog product={product} t={t} close={() => setModal(null)}
       save={body => edit.mutate(body)} pending={edit.isPending} error={edit.error} />}
     {modal === 'version' && <VersionDialog t={t} close={() => setModal(null)}

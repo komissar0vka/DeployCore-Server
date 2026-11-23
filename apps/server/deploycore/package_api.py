@@ -1,3 +1,4 @@
+import hashlib
 import os
 from datetime import UTC, datetime
 from typing import Annotated
@@ -12,13 +13,14 @@ from starlette.concurrency import run_in_threadpool
 from . import package_schemas as wire
 from . import package_storage as storage
 from .models import User
-from .package_models import PackageArtifact, PackageDetectionRule, SoftwarePackage, SoftwareVersion
+from .package_models import PackageArtifact, PackageDetectionRule, SoftwarePackage, SoftwareVersion, artifact_approved
 from .security import COOKIE, Db, Permission, active_session, audit, require
 
 router = APIRouter(prefix="/api/v1/packages", tags=["Packages"])
 Reader = Annotated[User, Depends(require(Permission.READ))]
 manage = require(Permission.MANAGE_OPERATIONS)
 Operator = Annotated[User, Depends(manage)]
+SystemAdmin = Annotated[User, Depends(require(Permission.MANAGE_SYSTEM))]
 
 
 def find_package(db: Db, package_id: UUID, *, lock: bool = False) -> SoftwarePackage:
@@ -28,17 +30,22 @@ def find_package(db: Db, package_id: UUID, *, lock: bool = False) -> SoftwarePac
     return package
 
 
-def find_version(db: Db, package_id: UUID, version_id: UUID) -> SoftwareVersion:
-    version = db.get(SoftwareVersion, version_id)
+def find_version(db: Db, package_id: UUID, version_id: UUID, *, lock: bool = False) -> SoftwareVersion:
+    version = db.get(SoftwareVersion, version_id, with_for_update=lock, populate_existing=lock)
     if version is None or version.package_id != package_id:
         raise HTTPException(404, "package_version_not_found")
     return version
 
 
 def version_view(version, rule, artifact) -> wire.VersionView:
+    approved = artifact_approved(version, artifact)
     return wire.VersionView.model_validate({
         **{key: getattr(version, key) for key in wire.VersionInput.model_fields if key != "detection"},
-        "id": version.id, "approved_at": version.approved_at, "approved_by": version.approved_by,
+        "id": version.id,
+        "approved_at": version.approved_at if approved else None,
+        "approved_by": version.approved_by if approved else None,
+        "approval_kind": version.approval_kind if approved else None,
+        "approved_sha256": version.approved_sha256 if approved else None,
         "detection": {"kind": rule.kind, **rule.data}, "artifact": artifact,
     })
 
@@ -184,16 +191,47 @@ async def upload_artifact(package_id: UUID, version_id: UUID,
 @router.post("/{package_id}/versions/{version_id}/approve")
 def approve_version(package_id: UUID, version_id: UUID, request: Request, db: Db, actor: Operator) -> wire.VersionView:
     find_package(db, package_id, lock=True)
-    version = find_version(db, package_id, version_id)
+    version = find_version(db, package_id, version_id, lock=True)
     artifact = db.get(PackageArtifact, version_id)
     if artifact is None or artifact.signature != "verified":
         raise HTTPException(409, "package_signature_required")
+    return record_approval(db, request, actor, version, artifact, "authenticode")
+
+
+@router.post("/{package_id}/versions/{version_id}/approve-manual")
+def approve_manual(package_id: UUID, version_id: UUID, data: wire.ManualApproval, request: Request,
+                   db: Db, actor: SystemAdmin) -> wire.VersionView:
+    find_package(db, package_id, lock=True)
+    version = find_version(db, package_id, version_id, lock=True)
+    artifact = db.get(PackageArtifact, version_id)
+    if artifact is None or artifact.signature != "unverified":
+        raise HTTPException(409, "package_manual_approval_unavailable")
+    if data.sha256.lower() != artifact.sha256:
+        raise HTTPException(409, "package_approval_hash_mismatch")
+    try:
+        with storage.artifact_path(version_id).open("rb") as source:
+            digest = hashlib.file_digest(source, "sha256").hexdigest()
+    except OSError as exc:
+        raise HTTPException(503, "package_storage_unavailable") from exc
+    if digest != artifact.sha256:
+        raise HTTPException(409, "package_approval_hash_mismatch")
+    return record_approval(db, request, actor, version, artifact, "manual")
+
+
+def record_approval(db: Db, request: Request, actor: User, version: SoftwareVersion,
+                    artifact: PackageArtifact, kind: str) -> wire.VersionView:
+    version_id = version.id
     if not storage.artifact_path(version_id).is_file():
         raise HTTPException(503, "package_storage_unavailable")
-    if version.approved_at is None:
+    if not artifact_approved(version, artifact):
         version.approved_at = datetime.now(UTC)
         version.approved_by = actor.id
-        audit(db, request, "package_version_approved", actor=actor, details={"version_id": str(version_id)})
+        version.approval_kind = kind
+        version.approved_sha256 = artifact.sha256
+        audit(db, request, "package_version_approved", actor=actor, details={
+            "version_id": str(version_id), "approval_kind": kind, "sha256": artifact.sha256,
+            "approved_at": version.approved_at.isoformat(),
+        })
     rule = db.get_one(PackageDetectionRule, version_id)
     db.commit()
     return version_view(version, rule, artifact)

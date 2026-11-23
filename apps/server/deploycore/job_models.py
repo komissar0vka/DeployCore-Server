@@ -17,6 +17,7 @@ class DeploymentJob(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     version_id: Mapped[UUID] = mapped_column(ForeignKey("software_versions.id"))
+    artifact_sha256: Mapped[str | None] = mapped_column(String(64))
     mode: Mapped[str] = mapped_column(String(16), server_default="transport_only")
     operation: Mapped[str] = mapped_column(String(12))
     created_by: Mapped[UUID] = mapped_column(ForeignKey("users.id"))

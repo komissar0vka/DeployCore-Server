@@ -23,6 +23,13 @@ class SoftwareVersion(Base):
     __tablename__ = "software_versions"
     __table_args__ = (
         UniqueConstraint("package_id", "version", "architecture", name="package_version_identity"),
+        CheckConstraint(
+            "(approved_at IS NULL AND approved_by IS NULL AND approval_kind IS NULL AND approved_sha256 IS NULL) OR "
+            "(approved_at IS NOT NULL AND approved_by IS NOT NULL AND approval_kind IS NOT NULL "
+            "AND approval_kind IN ('authenticode', 'manual') AND approved_sha256 IS NOT NULL "
+            "AND approved_sha256 ~ '^[a-f0-9]{64}$')",
+            name="package_approval",
+        ),
         CheckConstraint("architecture IN ('x64', 'x86')", name="package_architecture"),
         CheckConstraint("installer IN ('msi', 'exe')", name="package_installer"),
         CheckConstraint("timeout_seconds BETWEEN 1 AND 86400", name="package_timeout"),
@@ -42,6 +49,8 @@ class SoftwareVersion(Base):
     reboot_required: Mapped[bool]
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     approved_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    approval_kind: Mapped[str | None] = mapped_column(String(12))
+    approved_sha256: Mapped[str | None] = mapped_column(String(64))
 
 
 class PackageDetectionRule(Base):
@@ -69,3 +78,13 @@ class PackageArtifact(Base):
     sha256: Mapped[str] = mapped_column(String(64))
     signature: Mapped[str] = mapped_column(String(12))
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+def artifact_approved(version: SoftwareVersion, artifact: PackageArtifact | None) -> bool:
+    return (
+        artifact is not None
+        and version.approved_at is not None
+        and version.approved_sha256 == artifact.sha256
+        and (version.approval_kind, artifact.signature)
+        in {("manual", "unverified"), ("authenticode", "verified")}
+    )

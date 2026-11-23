@@ -92,10 +92,16 @@ class ArtifactView(Wire):
     uploaded_at: datetime
 
 
+class ManualApproval(Wire):
+    sha256: Annotated[str, StringConstraints(pattern=r"^[a-fA-F0-9]{64}$")]
+
+
 class VersionView(VersionInput):
     id: UUID
     approved_at: datetime | None
     approved_by: UUID | None
+    approval_kind: Literal["authenticode", "manual"] | None
+    approved_sha256: str | None
     artifact: ArtifactView | None
 
 
