@@ -71,3 +71,9 @@ Super Admin может утвердить загруженный MSI/EXE с не
 Для предпросмотра требуется Administrator или Super Admin, при создании действует защита CSRF. Запрос активен две минуты. За это окно разрешён один запрос на устройство и до пяти на оператора. Машинные маршруты используют Bearer-ключ соответствующего устройства.
 
 В `jobs/.../result` Agent 0.3.5 может передать `detection`, `process_started` и `reboot_pending: true`. В последнем случае состояние цели становится `awaiting_reboot`. Завершающая проверка дополняет текущую попытку полями `reboot_detection` и `reboot_finished_at`. Код исходного процесса сохраняется.
+
+### Фильтры панели
+
+- `GET /deployments` принимает `q`, `scope=all|active|problem`, `operation`, `device_id`, `direction`, `offset` и `limit`. `total` учитывает фильтры, `active` и `problem` относятся ко всему экземпляру. Проблемные задания включают ошибки, неизвестные исходы и просроченные подтверждённые попытки или проверки после перезагрузки.
+- `GET /deployments/{job_id}/events` принимает `target_id` и курсор `before`, события попыток содержат `attempt_number`.
+- `GET /devices` принимает статус `revoked` и точное значение `agent_version`. `GET /packages` поддерживает сортировку по `name` и `publisher`, направление задаёт `direction`.

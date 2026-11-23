@@ -1,7 +1,7 @@
 import os
 import re
 from datetime import datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -179,21 +179,51 @@ def create_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) -
     return result
 
 
+def job_matches_scope(scope: wire.JobScope, now: datetime):
+    if scope == "active":
+        return select(Target.id).where(Target.job_id == Job.id, Target.state.in_(("queued", *ACTIVE))).exists()
+    expired = select(Attempt.id).where(Attempt.target_id == Target.id, or_(
+        (Target.state == "running") & Attempt.finished_at.is_(None) & (Attempt.lease_expires_at <= now),
+        (Target.state == "awaiting_reboot") & Attempt.reboot_finished_at.is_(None) & (Attempt.reboot_deadline <= now),
+    )).exists()
+    return select(Target.id).where(Target.job_id == Job.id, or_(Target.state.in_(("failed", "unknown")), expired)).exists()
+
+
 @router.get("/deployments", tags=["Deployments"])
 def list_jobs(db: Db, actor: Reader, offset: Annotated[int, Query(ge=0, le=100000)] = 0,
-              limit: Annotated[int, Query(ge=1, le=100)] = 25) -> wire.JobPage:
-    rows = db.execute(
-        select(Job, SoftwareVersion.version, SoftwarePackage.name)
-        .join(SoftwareVersion, SoftwareVersion.id == Job.version_id)
-        .join(SoftwarePackage, SoftwarePackage.id == SoftwareVersion.package_id)
-        .order_by(Job.created_at.desc(), Job.id).offset(offset).limit(limit)
-    ).all()
+              limit: Annotated[int, Query(ge=1, le=100)] = 25,
+              q: Annotated[str, Query(max_length=160)] = "", scope: wire.JobScope = "all",
+              operation: wire.Operation | None = None, device_id: UUID | None = None,
+              direction: Literal["asc", "desc"] = "desc") -> wire.JobPage:
+    now = clock(db)
+    active, problem = job_matches_scope("active", now), job_matches_scope("problem", now)
+    query = (select(Job, SoftwareVersion.version, SoftwarePackage.name)
+             .join(SoftwareVersion, SoftwareVersion.id == Job.version_id)
+             .join(SoftwarePackage, SoftwarePackage.id == SoftwareVersion.package_id))
+    if term := q.strip():
+        query = query.where(or_(SoftwarePackage.name.icontains(term, autoescape=True),
+                                SoftwareVersion.version.icontains(term, autoescape=True)))
+    if operation is not None:
+        query = query.where(Job.operation == operation)
+    if device_id is not None:
+        query = query.where(select(Target.id).where(Target.job_id == Job.id, Target.device_id == device_id).exists())
+    if scope != "all":
+        query = query.where(active if scope == "active" else problem)
+    order = Job.created_at.asc() if direction == "asc" else Job.created_at.desc()
+    rows = db.execute(query.order_by(order, Job.id).offset(offset).limit(limit)).all()
     counts = counts_for(db, [row[0].id for row in rows])
-    active_count = db.scalar(select(func.count(func.distinct(Target.job_id))).where(Target.state.in_(("queued", *ACTIVE))))
+    active_count, problem_count = db.execute(select(
+        func.count().filter(active), func.count().filter(problem),
+    ).select_from(Job)).one()
     result = wire.JobPage(items=[view(*row, counts[row[0].id]) for row in rows],
-                          total=db.scalar(select(func.count(Job.id))), active=active_count)
+                          total=db.scalar(select(func.count()).select_from(query.subquery())),
+                          active=active_count, problem=problem_count)
     db.commit()
     return result
+
+
+def retry_requires_admin(attempt_outcome, reboot_deadline, reboot_observation) -> bool:
+    return attempt_outcome == "unknown" or (reboot_deadline is not None and reboot_observation in (None, "unknown"))
 
 
 @router.get("/deployments/{job_id}", tags=["Deployments"])
@@ -206,7 +236,7 @@ def job_detail(job_id: UUID, db: Db, actor: Reader) -> wire.JobDetail:
         select(Target, Device.hostname, latest.c.number, latest.c.lease_expires_at,
                latest.c.stage, latest.c.exit_code, latest.c.diagnostic, latest.c.output_bytes,
                latest.c.started_at, latest.c.process_started, latest.c.detection, latest.c.reboot_deadline, latest.c.reboot_detection,
-               latest.c.reboot_finished_at).select_from(Target)
+               latest.c.reboot_finished_at, latest.c.outcome).select_from(Target)
         .join(Device, Device.id == Target.device_id).outerjoin(latest, text("true"))
         .where(Target.job_id == job_id).order_by(Device.hostname, Device.id)
     )
@@ -218,20 +248,27 @@ def job_detail(job_id: UUID, db: Db, actor: Reader) -> wire.JobDetail:
         stage=stage, exit_code=code, diagnostic=diagnostic, output_bytes=output,
         started_at=started, process_started=launched, detection=observation, reboot_deadline=deadline, reboot_detection=reboot_observation,
         reboot_finished_at=reboot_finished,
+        retry_requires_admin=retry_requires_admin(outcome, deadline, reboot_observation),
         reboot_diagnostic=reboot_diagnostic(target.state, reboot_observation, reboot_finished),
     ) for target, name, number, expires, stage, code, diagnostic, output, started, launched, observation, deadline,
-          reboot_observation, reboot_finished in rows]
+          reboot_observation, reboot_finished, outcome in rows]
     db.commit()
     return wire.JobDetail(**summary.model_dump(), targets=targets)
 
 
 @router.get("/deployments/{job_id}/events", tags=["Deployments"])
-def job_events(job_id: UUID, db: Db, actor: Reader, before: Annotated[int, Query(ge=1)] | None = None) -> list[wire.EventView]:
+def job_events(job_id: UUID, db: Db, actor: Reader, before: Annotated[int, Query(ge=1)] | None = None,
+               target_id: UUID | None = None) -> list[wire.EventView]:
     job_row(db, job_id)
-    query = select(Event).where(Event.job_id == job_id)
+    query = (select(Event, Attempt.number).outerjoin(Attempt, Attempt.id == Event.attempt_id)
+             .where(Event.job_id == job_id))
     if before is not None:
         query = query.where(Event.id < before)
-    result = [wire.EventView.model_validate(entry) for entry in db.scalars(query.order_by(Event.id.desc()).limit(50))]
+    if target_id is not None:
+        query = query.where(Event.target_id == target_id)
+    result = [wire.EventView(id=entry.id, target_id=entry.target_id, attempt_id=entry.attempt_id,
+                             attempt_number=number, action=entry.action, created_at=entry.created_at)
+              for entry, number in db.execute(query.order_by(Event.id.desc()).limit(50))]
     db.commit()
     return result
 

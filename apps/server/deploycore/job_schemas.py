@@ -8,6 +8,7 @@ from .device_schemas import Wire
 from .package_schemas import DetectionState
 
 Operation = Literal["install", "uninstall"]
+JobScope = Literal["all", "active", "problem"]
 TargetState = Literal["queued", "leased", "running", "not_executed", "cancelled", "failed",
                       "succeeded", "already_installed", "already_absent", "reboot_required", "awaiting_reboot", "unknown"]
 Mode = Literal["transport_only", "execute_v1"]
@@ -49,6 +50,7 @@ class JobPage(Wire):
     items: list[JobView]
     total: int
     active: int
+    problem: int
 
 
 class TargetView(Wire):
@@ -60,6 +62,7 @@ class TargetView(Wire):
     attempt: int | None
     lease_expires_at: datetime | None
     recovery_required: bool
+    retry_requires_admin: bool = False
     stage: Stage | None = None
     exit_code: int | None = None
     diagnostic: Diagnostic | None = None
@@ -81,6 +84,7 @@ class EventView(Wire):
     id: int
     target_id: UUID | None
     attempt_id: UUID | None
+    attempt_number: int | None = None
     action: str
     created_at: datetime
 

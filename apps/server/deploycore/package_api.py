@@ -1,7 +1,7 @@
 import hashlib
 import os
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -63,13 +63,17 @@ def commit(db: Db):
 @router.get("")
 def list_packages(db: Db, actor: Reader, q: Annotated[str, Query(max_length=160)] = "",
                   offset: Annotated[int, Query(ge=0, le=100000)] = 0,
-                  limit: Annotated[int, Query(ge=1, le=100)] = 25) -> wire.PackagePage:
+                  limit: Annotated[int, Query(ge=1, le=100)] = 25,
+                  sort: Literal["name", "publisher"] = "name",
+                  direction: Literal["asc", "desc"] = "asc") -> wire.PackagePage:
     query = select(SoftwarePackage).where(SoftwarePackage.archived_at.is_(None))
     if term := q.strip():
         query = query.where(or_(SoftwarePackage.name.icontains(term, autoescape=True),
                                 SoftwarePackage.publisher.icontains(term, autoescape=True)))
     total = db.scalar(select(func.count()).select_from(query.subquery()))
-    rows = db.scalars(query.order_by(SoftwarePackage.name, SoftwarePackage.id).offset(offset).limit(limit))
+    field = SoftwarePackage.name if sort == "name" else SoftwarePackage.publisher
+    order = field.asc() if direction == "asc" else field.desc()
+    rows = db.scalars(query.order_by(order, SoftwarePackage.id).offset(offset).limit(limit))
     result = wire.PackagePage(items=[wire.PackageView.model_validate(row) for row in rows], total=total)
     db.commit()
     return result

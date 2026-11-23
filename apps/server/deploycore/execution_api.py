@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from . import job_schemas as wire
 from . import package_schemas as catalog
 from .device_api import AgentDevice
-from .job_api import ACTIVE, GROUP_KINDS, LEASE, attempt_for, clock, detection_capable, event, execution_enabled, get_view, last_attempt
+from .job_api import ACTIVE, GROUP_KINDS, LEASE, attempt_for, clock, detection_capable, event, execution_enabled, get_view, last_attempt, retry_requires_admin
 from .job_models import DeploymentJob as Job, DeploymentTarget as Target
 from .models import User
 from .package_models import PackageArtifact, PackageDetectionRule, SoftwarePackage, SoftwareVersion, artifact_approved
@@ -136,7 +136,7 @@ def retry(job_id: UUID, target_id: UUID, data: Retry, request: Request, db: Db, 
     if target.state != "failed":
         raise HTTPException(409, "deployment_retry_unavailable")
     attempt = last_attempt(db, target.id)
-    if attempt is not None and (attempt.outcome == "unknown" or (attempt.reboot_deadline is not None and attempt.reboot_detection in (None, "unknown"))) and actor.role != "super_admin":
+    if attempt is not None and retry_requires_admin(attempt.outcome, attempt.reboot_deadline, attempt.reboot_detection) and actor.role != "super_admin":
         raise HTTPException(403, "permission_denied")
     job = db.get_one(Job, job_id)
     return create_job(wire.JobInput(version_id=job.version_id, mode=job.mode, operation=job.operation,

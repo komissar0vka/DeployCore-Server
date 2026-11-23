@@ -68,7 +68,8 @@ def exercise_packages(check, login, sql, compose, base, context, admin):
     item = check("/packages", {201}, method="POST", data=fields, **operator)[1]
     path = "/packages/" + item["id"]
     check("/packages", {409}, method="POST", data=fields, **operator)
-    assert check("/packages?q=Test%20CA", {200}, **viewer)[1]["total"] == 1
+    assert check("/packages?q=Test%20CA&sort=publisher&direction=desc", {200}, **viewer)[1]["total"] == 1
+    check("/packages?sort=updated", {422}, **viewer)
     assert check(path, {200}, **viewer)[1]["versions"] == []
     check(path, {403}, method="PATCH", **viewer, data={"description": "blocked"})
     check(path, {422}, method="PATCH", **operator, data={"name": None})

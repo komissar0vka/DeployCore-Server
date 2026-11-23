@@ -3,11 +3,11 @@ import { Database, Layers3, Server } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AuditPage, SettingsPage, UsersPage } from './admin'
-import { api, ApiError, type Session, type Settings, type SetupStatus } from './api'
-import { AppShell, inDevelopment, sections, useConsoleRoute } from './console-shell'
+import { api, ApiError, type Language, type Session, type Settings, type SetupStatus } from './api'
+import { AppShell, useConsoleRoute } from './console-shell'
 import { Dashboard } from './dashboard'
 import { AgentInstallPage, DevicesPage } from './devices'
-import { EmptyState, LoadingSkeleton, StatusBadge } from './design'
+import { LoadingSkeleton, StatusBadge } from './design'
 import { DeploymentsPage, type DeploymentPreset } from './deployments'
 import { PackageCatalog } from './packages'
 import { Login, SetupWizard } from './setup'
@@ -88,7 +88,18 @@ function Console({ session, initialLanguage }: { session: Session; initialLangua
     return () => window.clearTimeout(timer)
   }, [expiry])
   const settings = useQuery({ queryKey: ['settings'], queryFn: () => api<Settings>('/settings'), staleTime: 60_000 })
-  const language = settings.data?.language ?? initialLanguage
+  const [locale, setLocale] = useState<Language | undefined>(() => {
+    try {
+      const value = localStorage.getItem('deploycore-language')
+      return value === 'ru' || value === 'en' ? value : undefined
+    } catch { return undefined }
+  })
+  function changeLanguage(value: Language) {
+    setLocale(value)
+    try { localStorage.setItem('deploycore-language', value) } catch { /* Session state still applies. */ }
+  }
+  const instanceLanguage = settings.data?.language ?? initialLanguage
+  const language = locale ?? instanceLanguage
   const t = translator(language)
   const logout = useMutation({
     mutationFn: () => api<void>('/auth/logout', { method: 'POST', csrf: session.csrf_token }),
@@ -97,8 +108,8 @@ function Console({ session, initialLanguage }: { session: Session; initialLangua
   const { route, navigate } = useConsoleRoute(session.user.role)
   useEffect(() => {
     document.documentElement.lang = language
-    queryClient.setQueryData<SetupStatus>(['setup'], status => status ? { ...status, language } : status)
-  }, [language])
+    queryClient.setQueryData<SetupStatus>(['setup'], status => status ? { ...status, language: instanceLanguage } : status)
+  }, [language, instanceLanguage])
 
   const openInstaller = () => navigate({ section: 'agent' })
   const [deploymentPreset, setDeploymentPreset] = useState<DeploymentPreset>()
@@ -107,30 +118,35 @@ function Console({ session, initialLanguage }: { session: Session; initialLangua
     navigate({ section: 'jobs' })
   }
   const section = route.section
-  const pending = inDevelopment[section]
-  const PendingIcon = sections[section][2]
-  const deviceSection = section === 'devices' || section === 'inventory'
-  return <AppShell route={route} navigate={navigate} session={session} t={t}
+  const deviceSection = section === 'devices' || section === 'inventory' || section === 'agents'
+  return <AppShell route={route} navigate={navigate} session={session} t={t} language={language} changeLanguage={changeLanguage}
     organization={settings.data?.organization} logout={() => logout.mutate()} loggingOut={logout.isPending}>
     <FormError message={logout.error && errorMessage(logout.error, t)} />
     {section === 'dashboard' && <Dashboard t={t}
       openInstaller={session.user.role !== 'viewer' ? openInstaller : undefined}
       openDevices={status => navigate({ section: 'devices', status })}
       openInventory={() => navigate({ section: 'inventory' })}
-      openJobs={() => openDeployment()}
+      openJobs={(jobScope, job) => navigate({ section: 'jobs', jobScope, job })}
+      openAgents={agentVersion => navigate({ section: 'agents', agentVersion })}
       health={<footer className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
         <HealthCard kind="live" t={t} /><HealthCard kind="ready" t={t} />
         <div className="flex items-center justify-between gap-2 rounded-xl border border-border bg-card px-3 py-2.5 text-sm">
           <span>{t('Версия сервера', 'Server version')}</span><span className="font-mono text-info">{settings.data?.version ?? '—'}</span>
         </div>
       </footer>} />}
-    {deviceSection && <DevicesPage key={`${section}:${route.search ?? ''}:${route.status ?? ''}`}
+    {deviceSection && <DevicesPage key={`${section}:${route.search ?? ''}:${route.status ?? ''}:${route.agentVersion ?? ''}`}
       session={session} t={t} openInstaller={openInstaller}
       initialSearch={route.search} initialStatus={route.status}
       selected={route.device} onSelect={device => navigate({ ...route, device })}
-      onFilter={(search, status) => navigate({ section, search, status })}
+      onFilter={(search, status, agentVersion) => navigate({ section, search, status, agentVersion })}
+      monitoring={section === 'agents'} agentVersion={route.agentVersion}
+      openHistory={targetDevice => navigate({ section: 'jobs', targetDevice })}
       inventory={section === 'inventory'} onSoftware={(deviceId, deviceName) => openDeployment({ deviceId, deviceName })} />}
-    {section === 'jobs' && <DeploymentsPage session={session} t={t} preset={deploymentPreset} clearPreset={() => setDeploymentPreset(undefined)} />}
+    {section === 'jobs' && <DeploymentsPage session={session} t={t} preset={deploymentPreset} clearPreset={() => setDeploymentPreset(undefined)}
+      scope={route.jobScope} targetDevice={route.targetDevice} selected={route.job}
+      onScope={jobScope => navigate({ ...route, jobScope })}
+      onSelect={job => navigate({ ...route, job })}
+      clearDevice={() => navigate({ ...route, targetDevice: undefined })} />}
     {section === 'software' && <PackageCatalog session={session} t={t} deploy={openDeployment} />}
     {section === 'agent' && <AgentInstallPage session={session} t={t} server={settings.data?.agent_url ?? window.location.origin} />}
     {section === 'settings' && (settings.data
@@ -138,7 +154,6 @@ function Console({ session, initialLanguage }: { session: Session; initialLangua
       : settings.error ? <FormError message={errorMessage(settings.error, t)} /> : <LoadingSkeleton label={t('Загрузка…', 'Loading…')} />)}
     {section === 'users' && <UsersPage session={session} t={t} />}
     {section === 'audit' && <AuditPage t={t} />}
-    {pending && <Panel><EmptyState icon={PendingIcon} title={t('В разработке', 'In development')} description={t(...pending)} /></Panel>}
   </AppShell>
 }
 

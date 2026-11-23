@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDown, ArrowLeft, ArrowUp, ArrowUpDown, ArrowDownToLine, LayoutGrid, List, Monitor, MoreHorizontal } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
+import { useFleetSummary } from './dashboard'
 import type { DeviceStatusFilter } from './console-shell'
 import { ActivityFeed, ConfirmDialog, DataTable, DeviceCard, EmptyState, LoadingSkeleton, SectionTitle, StatusBadge } from './design'
 import { Dropdown } from './components/ui/dropdown'
@@ -79,14 +80,17 @@ function SecretBox({ value, t, close }: { value: string; t: Translate; close: ()
 
 type SortKey = 'hostname' | 'status' | 'os' | 'agent' | 'last_seen'
 
-export function DevicesPage({ session, t, openInstaller, initialSearch = '', initialStatus = 'all', selected, onSelect, onFilter, inventory, onSoftware }: Props & {
+export function DevicesPage({ session, t, openInstaller, initialSearch = '', initialStatus = 'all', selected, onSelect, onFilter, inventory, monitoring, agentVersion, openHistory, onSoftware }: Props & {
   openInstaller: () => void
   initialSearch?: string
   initialStatus?: DeviceStatusFilter
   selected?: string
   onSelect: (device?: string) => void
   onSoftware: (deviceId: string, deviceName: string) => void
-  onFilter: (query: string, status: DeviceStatusFilter) => void
+  onFilter: (query: string, status: DeviceStatusFilter, version?: string) => void
+  monitoring: boolean
+  agentVersion?: string
+  openHistory: (id: string) => void
   inventory: boolean
 }) {
   const [search, setSearch] = useState(initialSearch)
@@ -97,13 +101,15 @@ export function DevicesPage({ session, t, openInstaller, initialSearch = '', ini
   const [display, setDisplay] = useState<'auto' | 'table' | 'cards'>('auto')
   const [selection, setSelection] = useState(new Map<string, string>())
   const [copyStatus, setCopyStatus] = useState('')
+  const fleet = useFleetSummary()
   const devices = useQuery({
-    queryKey: ['devices', term, status, page, sort.key, sort.direction], enabled: !selected,
+    queryKey: ['devices', term, status, page, sort.key, sort.direction, agentVersion], enabled: !selected,
+    refetchInterval: monitoring ? 15_000 : false,
     queryFn: () => api<{ items: Device[]; total: number }>(`/devices?${new URLSearchParams({
-      q: term, status, offset: String(page * pageSize), limit: String(pageSize), sort: sort.key, direction: sort.direction,
+      q: term, status, ...(agentVersion ? { agent_version: agentVersion } : {}), offset: String(page * pageSize), limit: String(pageSize), sort: sort.key, direction: sort.direction,
     })}`),
   })
-  if (selected) return <Computer key={selected} id={selected} session={session} t={t} back={() => onSelect()} inventory={inventory} onSoftware={onSoftware} />
+  if (selected) return <Computer key={selected} id={selected} session={session} t={t} back={() => onSelect()} inventory={inventory} openHistory={openHistory} onSoftware={onSoftware} />
 
   const items = devices.data?.items ?? []
   const pageSelected = items.length > 0 && items.every(device => selection.has(device.id))
@@ -167,19 +173,28 @@ export function DevicesPage({ session, t, openInstaller, initialSearch = '', ini
       <form className="flex flex-wrap items-end gap-3" onSubmit={event => {
         event.preventDefault()
         if (term === search.trim() && page === 0) void devices.refetch()
-        onFilter(search.trim(), status)
+        onFilter(search.trim(), status, agentVersion)
         setPage(0)
       }}>
         <Field label={t('Имя, FQDN или IP', 'Hostname, FQDN or IP')} value={search} maxLength={120} onChange={event => setSearch(event.target.value)} />
         <label className="grid gap-2 text-sm font-medium">{t('Статус', 'Status')}
           <select className="input" value={status} onChange={event => {
-            onFilter(term, event.target.value as DeviceStatusFilter)
+            onFilter(term, event.target.value as DeviceStatusFilter, agentVersion)
           }}>
             <option value="all">{t('Все', 'All')}</option>
             <option value="online">{t('Онлайн', 'Online')}</option>
             <option value="offline">{t('Офлайн', 'Offline')}</option>
+            <option value="revoked">{t('Ключ отозван', 'Revoked')}</option>
           </select>
         </label>
+        {monitoring && <label className="grid min-w-0 gap-2 text-sm">{t('Версия агента', 'Agent version')}
+          <select className="input" value={agentVersion ?? ''} disabled={fleet.isPending} onChange={event => onFilter(term, status, event.target.value || undefined)}>
+            <option value="">{t('Все версии', 'All versions')}</option>
+            {[...new Set([...Object.keys(fleet.data?.versions ?? {}), ...(agentVersion ? [agentVersion] : [])])].map(version =>
+              <option key={version} value={version}>{version} {fleet.data?.versions[version] != null ? `(${fleet.data.versions[version]})` : ''}</option>)}
+          </select>
+          {fleet.isError && <FormError message={errorMessage(fleet.error, t)} />}
+        </label>}
         <Action type="submit">{t('Поиск', 'Search')}</Action>
         <Action secondary type="button" onClick={() => void devices.refetch()} disabled={devices.isFetching}>{t('Обновить', 'Refresh')}</Action>
       </form>
@@ -187,7 +202,7 @@ export function DevicesPage({ session, t, openInstaller, initialSearch = '', ini
 
     <Panel>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-base font-semibold">{inventory ? t('Снимки инвентаризации', 'Inventory snapshots') : t('Список устройств', 'Device list')}
+        <h2 className="text-base font-semibold">{inventory ? t('Снимки инвентаризации', 'Inventory snapshots') : monitoring ? t('Связь с агентами', 'Agent connectivity') : t('Список устройств', 'Device list')}
           {devices.data && <span className="ml-2 text-sm font-medium tabular-nums text-muted-foreground">{devices.data.total}</span>}
         </h2>
         <div className="flex gap-1 rounded-lg border border-border p-0.5">
@@ -203,8 +218,8 @@ export function DevicesPage({ session, t, openInstaller, initialSearch = '', ini
       {devices.isPending && <LoadingSkeleton label={t('Загрузка…', 'Loading…')} />}
       <FormError message={devices.error && errorMessage(devices.error, t)} />
       {devices.data?.items.length === 0 && <EmptyState icon={Monitor}
-        title={term || status !== 'all' ? t('Нет устройств по выбранным условиям', 'No devices match the selected filters') : t('Устройств пока нет', 'No devices yet')}
-        action={term || status !== 'all'
+        title={term || status !== 'all' || agentVersion ? t('Нет устройств по выбранным условиям', 'No devices match the selected filters') : t('Устройств пока нет', 'No devices yet')}
+        action={term || status !== 'all' || agentVersion
           ? <Action secondary onClick={() => onFilter('', 'all')}>{t('Сбросить фильтры', 'Clear filters')}</Action>
           : session.user.role !== 'viewer' ? <Action secondary onClick={openInstaller}>{t('Установка агента', 'Agent installation')}</Action> : undefined} />}
       {!!items.length && <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -281,13 +296,14 @@ export function DevicesPage({ session, t, openInstaller, initialSearch = '', ini
   </div>
 }
 
-function Computer({ id, session, t, back, inventory, onSoftware }: Props & { id: string; back: () => void; inventory: boolean; onSoftware: (deviceId: string, deviceName: string) => void }) {
+function Computer({ id, session, t, back, inventory, openHistory, onSoftware }: Props & { id: string; back: () => void; inventory: boolean; openHistory: (id: string) => void; onSoftware: (deviceId: string, deviceName: string) => void }) {
   const queryClient = useQueryClient()
   const detail = useQuery({ queryKey: ['device', id], queryFn: () => api<DeviceDetail>(`/devices/${id}`) })
   const [secret, setSecret] = useState<string | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   const [issuing, setIssuing] = useState(false)
   const [softwareFilter, setSoftwareFilter] = useState('')
+  const [softwarePage, setSoftwarePage] = useState(0)
   const [tab, setTab] = useState<'overview' | 'hardware' | 'software' | 'management' | 'events'>(inventory ? 'hardware' : 'overview')
   const [confirmation, setConfirmation] = useState<'revoke' | 'delete' | null>(null)
   const tabs = [
@@ -330,6 +346,9 @@ function Computer({ id, session, t, back, inventory, onSoftware }: Props & { id:
   }
 
   const computer = detail.data
+  const term = softwareFilter.trim().toLowerCase()
+  const programs = computer?.software.filter(program =>
+    [program.name, program.version, program.publisher].some(value => value.toLowerCase().includes(term))) ?? []
   const eventNames: Record<string, string> = {
     registered: t('Зарегистрирован', 'Registered'), reconnected: t('Связь восстановлена', 'Reconnected'),
     inventory_failed: t('Ошибка инвентаризации', 'Inventory refresh failed'),
@@ -406,19 +425,25 @@ function Computer({ id, session, t, back, inventory, onSoftware }: Props & { id:
       </Panel>}
       {tab === 'software' && <Panel>
         <h2 className="mb-3 text-lg font-semibold">{t('Установленные программы', 'Installed software')} · {computer.software.length}</h2>
-        {!!computer.software.length && <Field label={t('Поиск по программам', 'Search software')} value={softwareFilter} onChange={event => setSoftwareFilter(event.target.value)} />}
+        {!!computer.software.length && <Field label={t('Поиск по программам', 'Search software')} value={softwareFilter} onChange={event => { setSoftwarePage(0); setSoftwareFilter(event.target.value) }} />}
         {computer.software.length === 0 && <p className="text-sm text-muted-foreground">{computer.inventory
           ? t('Агент не нашёл программ в реестре.', 'The agent found no software in the registry.')
           : t('Агент ещё не прислал инвентаризацию.', 'The agent has not sent an inventory yet.')}</p>}
-        <ul className="mt-3 max-h-96 overflow-auto text-sm">
-          {computer.software.filter(program => [program.name, program.version, program.publisher].some(value => value.toLowerCase().includes(softwareFilter.toLowerCase()))).map(program =>
+        {!!computer.software.length && !programs.length && <EmptyState title={t('Программы по запросу не найдены', 'No matching software')} />}
+        <ul className="mt-3 text-sm">
+          {programs.slice(softwarePage * pageSize, (softwarePage + 1) * pageSize).map(program =>
             <li key={JSON.stringify(program)} className="grid gap-1 break-words border-t border-border py-2 sm:grid-cols-3">
               <span>{program.name}</span><span className="text-muted-foreground">{program.version}</span><span className="text-muted-foreground">{program.publisher}</span>
             </li>)}
         </ul>
+        {programs.length > pageSize && <div className="mt-3 flex flex-wrap gap-2">
+          <Action secondary disabled={!softwarePage} onClick={() => setSoftwarePage(softwarePage - 1)}>{t('Предыдущая', 'Previous')}</Action>
+          <Action secondary disabled={(softwarePage + 1) * pageSize >= programs.length} onClick={() => setSoftwarePage(softwarePage + 1)}>{t('Следующая', 'Next')}</Action>
+        </div>}
       </Panel>}
       {tab === 'management' && <Panel>
-        <SectionTitle title={t('Управление ПО', 'Software management')} />
+        <SectionTitle title={t('Управление ПО', 'Software management')}
+          actions={<Action secondary onClick={() => openHistory(id)}>{t('История развёртываний', 'Deployment history')}</Action>} />
         {writable && !computer.device.agent_revoked
           ? <Action onClick={() => onSoftware(id, computer.device.hostname)}>{t('Создать задание для этого ПК', 'Create a job for this computer')}</Action>
           : <EmptyState title={t('Создание заданий недоступно', 'Job creation unavailable')} />}

@@ -668,7 +668,8 @@
               "enum": [
                 "all",
                 "online",
-                "offline"
+                "offline",
+                "revoked"
               ],
               "type": "string",
               "default": "all",
@@ -728,6 +729,24 @@
               "type": "string",
               "default": "asc",
               "title": "Direction"
+            }
+          },
+          {
+            "name": "agent_version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Version"
             }
           }
         ],
@@ -1094,6 +1113,34 @@
               "minimum": 1,
               "default": 25,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "name",
+                "publisher"
+              ],
+              "type": "string",
+              "default": "name",
+              "title": "Sort"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string",
+              "default": "asc",
+              "title": "Direction"
             }
           }
         ],
@@ -1710,6 +1757,83 @@
               "default": 25,
               "title": "Limit"
             }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 160,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "all",
+                "active",
+                "problem"
+              ],
+              "type": "string",
+              "default": "all",
+              "title": "Scope"
+            }
+          },
+          {
+            "name": "operation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "install",
+                    "uninstall"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Operation"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string",
+              "default": "desc",
+              "title": "Direction"
+            }
           }
         ],
         "responses": {
@@ -1822,6 +1946,23 @@
                 }
               ],
               "title": "Before"
+            }
+          },
+          {
+            "name": "target_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Id"
             }
           }
         ],
@@ -3795,6 +3936,10 @@
           "active": {
             "type": "integer",
             "title": "Active"
+          },
+          "problem": {
+            "type": "integer",
+            "title": "Problem"
           }
         },
         "additionalProperties": false,
@@ -3802,7 +3947,8 @@
         "required": [
           "items",
           "total",
-          "active"
+          "active",
+          "problem"
         ],
         "title": "JobPage"
       },
@@ -5053,6 +5199,11 @@
             "type": "boolean",
             "title": "Recovery Required"
           },
+          "retry_requires_admin": {
+            "type": "boolean",
+            "title": "Retry Requires Admin",
+            "default": false
+          },
           "stage": {
             "anyOf": [
               {
@@ -5843,6 +5994,17 @@
               }
             ],
             "title": "Attempt Id"
+          },
+          "attempt_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt Number"
           },
           "action": {
             "type": "string",

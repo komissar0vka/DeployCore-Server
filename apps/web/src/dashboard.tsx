@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
-import { Activity, ArrowDownToLine, ClipboardList, ListTodo, Monitor, Package, Radio, WifiOff } from 'lucide-react'
+import { ArrowDownToLine, ClipboardList, ListTodo, Monitor, Package, Radio, WifiOff } from 'lucide-react'
 import type { ReactNode } from 'react'
+import type { JobScope } from './console-shell'
 import { api } from './api'
 import { ActivityFeed, EmptyState, LoadingSkeleton, QuickAction, SectionTitle, StatCard } from './design'
 import { Action, errorMessage, FormError, Panel, type Translate } from './ui'
@@ -61,17 +62,18 @@ function FleetChart({ online, offline, total, t }: { online: number; offline: nu
   </div>
 }
 
-export function Dashboard({ t, openInstaller, openDevices, openInventory, openJobs, health }: {
+export function Dashboard({ t, openInstaller, openDevices, openInventory, openJobs, openAgents, health }: {
   t: Translate
   openInstaller?: () => void
   openDevices: (status?: 'online' | 'offline') => void
   openInventory: () => void
-  openJobs: () => void
+  openJobs: (scope?: JobScope, job?: string) => void
+  openAgents: (version?: string) => void
   health: ReactNode
 }) {
   const summary = useFleetSummary()
   const catalog = useQuery({ queryKey: ['packages', 'count'], queryFn: () => api<{ total: number }>('/packages?limit=1') })
-  const jobs = useQuery({ queryKey: ['deployments', 'count'], queryFn: () => api<{ active: number }>('/deployments?limit=1'), refetchInterval: 15_000 })
+  const jobs = useQuery({ queryKey: ['deployments', 'count'], queryFn: () => api<{ active: number; problem: number; items: { id: string; package_name: string; version: string; created_at: string }[] }>('/deployments?scope=problem&limit=5'), refetchInterval: 15_000 })
   const data = summary.data
   return <div className="grid gap-4">
     {summary.isError && <div className="grid gap-2">
@@ -79,14 +81,16 @@ export function Dashboard({ t, openInstaller, openDevices, openInventory, openJo
       <Action secondary disabled={summary.isFetching} onClick={() => void summary.refetch()}>{t('Повторить', 'Retry')}</Action>
     </div>}
     {summary.isPending ? <Panel><LoadingSkeleton label={t('Загрузка сводки', 'Loading fleet summary')} /></Panel> :
-      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-6">
         <StatCard label={t('Всего компьютеров', 'Total computers')} value={data?.total} icon={Monitor} onClick={() => openDevices()} />
         <StatCard label={t('Онлайн', 'Online')} value={data?.online} icon={Radio} tone="green" onClick={() => openDevices('online')} />
         <StatCard label={t('Офлайн', 'Offline')} value={data?.offline} icon={WifiOff} tone="red" onClick={() => openDevices('offline')} />
         <StatCard label={t('Программ в каталоге', 'Catalog programs')} value={catalog.data?.total} icon={Package} tone="blue"
           unavailable={catalog.isError ? t('Недоступно', 'Unavailable') : undefined} />
-        <StatCard label={t('Активных заданий', 'Active jobs')} icon={ListTodo} value={jobs.data?.active} onClick={openJobs}
+        <StatCard label={t('Активных заданий', 'Active jobs')} icon={ListTodo} value={jobs.data?.active} onClick={() => openJobs('active')}
           unavailable={jobs.isError ? t('Недоступно', 'Unavailable') : undefined} />
+        <StatCard label={t('Проблемных заданий', 'Jobs requiring attention')} icon={ListTodo} value={jobs.data?.problem} tone="red"
+          onClick={() => openJobs('problem')} unavailable={jobs.isError ? t('Недоступно', 'Unavailable') : undefined} />
       </div>}
 
     <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
@@ -97,13 +101,20 @@ export function Dashboard({ t, openInstaller, openDevices, openInventory, openJo
           : <EmptyState icon={Monitor} title={data ? t('Компьютеры ещё не подключены', 'No computers connected yet') : t('Сводка недоступна', 'Summary unavailable')} />}
         {!!data?.total && <div className="mt-4 border-t border-border pt-3">
           <h3 className="text-xs font-medium text-muted-foreground">{t('Версии агентов', 'Agent versions')}</h3>
-          <dl className="mt-2 flex flex-wrap gap-2">{Object.entries(data.versions).map(([version, count]) => <div className="flex gap-2 rounded-lg bg-muted px-2 py-1 text-xs" key={version}><dt>{version}</dt><dd className="text-muted-foreground">{count}</dd></div>)}</dl>
+          <dl className="mt-2 flex flex-wrap gap-2">{Object.entries(data.versions).map(([version, count]) => <div className="flex gap-2 rounded-lg bg-muted px-2 py-1 text-xs" key={version}><dt><button type="button" className="text-primary hover:underline" onClick={() => openAgents(version)}>{version}</button></dt><dd className="text-muted-foreground">{count}</dd></div>)}</dl>
         </div>}
       </Panel>
       <Panel>
-        <SectionTitle title={t('Динамика онлайн-компьютеров', 'Online computers over time')} />
-        <EmptyState icon={Activity} title={t('Исторических данных пока нет', 'No historical data yet')}
-          description={t('Текущая сводка показывает состояние на момент запроса.', 'The current summary shows a snapshot at the time of the request.')} />
+        <SectionTitle title={t('Требуют внимания', 'Requires attention')} />
+        {jobs.isPending && <LoadingSkeleton label={t('Загрузка заданий', 'Loading jobs')} rows={3} />}
+        <FormError message={jobs.error && errorMessage(jobs.error, t)} />
+        {jobs.data?.items.length === 0 && <EmptyState title={t('Проблемных заданий нет', 'No jobs require attention')} />}
+        <ul className="divide-y divide-border">{jobs.data?.items.map(job => <li key={job.id} className="flex flex-wrap items-center justify-between gap-2 py-3 text-sm">
+          <button type="button" onClick={() => openJobs('problem', job.id)} className="min-w-0 break-words text-start font-medium text-primary hover:underline">
+            {job.package_name} · {job.version}
+          </button>
+          <time dateTime={job.created_at} className="text-xs text-muted-foreground">{new Date(job.created_at).toLocaleString(document.documentElement.lang)}</time>
+        </li>)}</ul>
       </Panel>
     </div>
 
@@ -122,7 +133,7 @@ export function Dashboard({ t, openInstaller, openDevices, openInventory, openJo
         <Panel>
           <SectionTitle title={t('Активные задания', 'Active jobs')} />
           {jobs.isPending ? <LoadingSkeleton label={t('Загрузка заданий', 'Loading jobs')} rows={2} />
-            : jobs.data?.active ? <QuickAction icon={ListTodo} label={t('Открыть очередь', 'Open queue')} onClick={openJobs} />
+            : jobs.data?.active ? <QuickAction icon={ListTodo} label={t('Открыть очередь', 'Open queue')} onClick={() => openJobs('active')} />
             : <EmptyState icon={ListTodo} title={jobs.isError ? t('Очередь недоступна', 'Queue unavailable') : t('Активных заданий нет', 'No active jobs')} />}
         </Panel>
         <Panel>
@@ -130,6 +141,7 @@ export function Dashboard({ t, openInstaller, openDevices, openInventory, openJo
           <div className="grid gap-2">
             <QuickAction label={t('Открыть устройства', 'Open devices')} icon={Monitor} onClick={() => openDevices()} />
             <QuickAction label={t('Посмотреть инвентаризацию', 'View inventory')} icon={ClipboardList} onClick={openInventory} />
+            <QuickAction label={t('Мониторинг агентов', 'Agent monitoring')} icon={Radio} onClick={() => openAgents()} />
             {openInstaller && <QuickAction label={t('Скачать и настроить агент', 'Download and configure agent')} icon={ArrowDownToLine} onClick={openInstaller} />}
           </div>
         </Panel>

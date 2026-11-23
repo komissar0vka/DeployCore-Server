@@ -371,10 +371,12 @@ export function PackageCatalog({ session, t, deploy }: Props & { deploy: (preset
   const [search, setSearch] = useState('')
   const [term, setTerm] = useState('')
   const [offset, setOffset] = useState(0)
+  const [sort, setSort] = useState<'name' | 'publisher'>('name')
+  const [direction, setDirection] = useState<'asc' | 'desc'>('asc')
   const [open, setOpen] = useState(false)
   const query = useQuery({
-    queryKey: ['packages', term, offset], enabled: !selected,
-    queryFn: () => api<{ items: Product[]; total: number }>(`/packages?${new URLSearchParams({ q: term, offset: String(offset), limit: String(pageSize) })}`),
+    queryKey: ['packages', term, offset, sort, direction], enabled: !selected,
+    queryFn: () => api<{ items: Product[]; total: number }>(`/packages?${new URLSearchParams({ q: term, offset: String(offset), limit: String(pageSize), sort, direction })}`),
   })
   const create = useMutation({
     mutationFn: (body: ProductFields) => api<Product>('/packages', { method: 'POST', body, csrf: session.csrf_token }),
@@ -386,6 +388,16 @@ export function PackageCatalog({ session, t, deploy }: Props & { deploy: (preset
       <Action onClick={() => { create.reset(); setOpen(true) }}><Plus className="size-4" aria-hidden />{t('Новая программа', 'New program')}</Action>} />
     <form className="mb-4 flex flex-wrap items-end gap-2" onSubmit={event => { event.preventDefault(); setTerm(search.trim()); setOffset(0) }}>
       <Field label={t('Название или издатель', 'Name or publisher')} value={search} maxLength={160} onChange={event => setSearch(event.target.value)} />
+      <label className="grid gap-2 text-sm">{t('Сортировка', 'Sort by')}
+        <select className="input" value={sort} onChange={event => { setOffset(0); setSort(event.target.value === 'publisher' ? 'publisher' : 'name') }}>
+          <option value="name">{t('Название', 'Name')}</option><option value="publisher">{t('Издатель', 'Publisher')}</option>
+        </select>
+      </label>
+      <label className="grid gap-2 text-sm">{t('Порядок', 'Order')}
+        <select className="input" value={direction} onChange={event => { setOffset(0); setDirection(event.target.value === 'desc' ? 'desc' : 'asc') }}>
+          <option value="asc">{t('По возрастанию', 'Ascending')}</option><option value="desc">{t('По убыванию', 'Descending')}</option>
+        </select>
+      </label>
       <Action secondary type="submit">{t('Поиск', 'Search')}</Action>
     </form>
     {query.isPending && <LoadingSkeleton label={t('Загрузка каталога', 'Loading catalog')} />}

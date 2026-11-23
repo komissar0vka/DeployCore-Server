@@ -1,9 +1,9 @@
 import {
-  Bell, Building2, ChevronDown, ClipboardList, FileBarChart2, KeyRound, Layers3, LayoutDashboard,
+  Bell, ChevronDown, ClipboardList, Languages, Layers3, LayoutDashboard, Radio,
   ListChecks, Menu, Monitor, Moon, Package, Rocket, Settings2, Sun, Users, type LucideIcon,
 } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import type { Session } from './api'
+import type { Language, Session } from './api'
 import { EmptyState, LoadingSkeleton, PageHeader, SearchInput } from './design'
 import { Dialog } from './components/ui/dialog'
 import { Dropdown } from './components/ui/dropdown'
@@ -13,30 +13,37 @@ import { roleLabels, type Translate } from './ui'
 export const sections = {
   dashboard: ['Дашборд', 'Dashboard', LayoutDashboard],
   devices: ['Устройства', 'Devices', Monitor],
-  map: ['Карта помещений', 'Floor plans', Building2],
   software: ['Программы', 'Software', Package],
-  agent: ['Развёртывание', 'Deployment', Rocket],
+  agent: ['Установка агента', 'Agent installation', Rocket],
+  agents: ['Агенты Windows', 'Windows agents', Radio],
   jobs: ['Задания', 'Jobs', ListChecks],
   inventory: ['Инвентаризация', 'Inventory', ClipboardList],
-  reports: ['Отчёты', 'Reports', FileBarChart2],
   users: ['Пользователи', 'Users', Users],
   audit: ['Журнал событий', 'Audit log', ClipboardList],
   settings: ['Настройки', 'Settings', Settings2],
-  license: ['Лицензия', 'License', KeyRound],
 } satisfies Record<string, [string, string, LucideIcon]>
 
 export type Section = keyof typeof sections
-export type DeviceStatusFilter = 'all' | 'online' | 'offline'
+export type DeviceStatusFilter = 'all' | 'online' | 'offline' | 'revoked'
+export type JobScope = 'all' | 'active' | 'problem'
 export interface ConsoleRoute {
   section: Section
   device?: string
   search?: string
   status?: DeviceStatusFilter
+  jobScope?: JobScope
+  job?: string
+  targetDevice?: string
+  agentVersion?: string
 }
 
 export function canOpen(section: Section, role: Session['user']['role']) {
   if (section === 'users' || section === 'audit') return role === 'super_admin'
   return section !== 'agent' || role !== 'viewer'
+}
+
+function readUUID(value: string | null) {
+  return value && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value) ? value : undefined
 }
 
 function readRoute(): ConsoleRoute {
@@ -48,7 +55,11 @@ function readRoute(): ConsoleRoute {
     section: Object.hasOwn(sections, section) ? section as Section : 'dashboard',
     device: device && /^[0-9a-f-]{36}$/i.test(device) ? device : undefined,
     search: params.get('q')?.slice(0, 120),
-    status: status === 'online' || status === 'offline' ? status : undefined,
+    status: status === 'online' || status === 'offline' || status === 'revoked' ? status : undefined,
+    jobScope: params.get('scope') === 'active' ? 'active' : params.get('scope') === 'problem' ? 'problem' : undefined,
+    job: readUUID(params.get('job')),
+    targetDevice: readUUID(params.get('target')),
+    agentVersion: params.get('version')?.slice(0, 64) || undefined,
   }
 }
 
@@ -64,6 +75,10 @@ export function useConsoleRoute(role: Session['user']['role']) {
     const params = new URLSearchParams()
     if (next.search) params.set('q', next.search)
     if (next.status && next.status !== 'all') params.set('status', next.status)
+    if (next.jobScope && next.jobScope !== 'all') params.set('scope', next.jobScope)
+    if (next.job) params.set('job', next.job)
+    if (next.targetDevice) params.set('target', next.targetDevice)
+    if (next.agentVersion) params.set('version', next.agentVersion)
     const query = params.toString()
     window.location.hash = next.section + (next.device ? '/' + next.device : '') + (query ? '?' + query : '')
   }
@@ -71,16 +86,10 @@ export function useConsoleRoute(role: Session['user']['role']) {
   return { route: canOpen(route.section, role) ? route : { section: 'dashboard' as const }, navigate }
 }
 
-export const inDevelopment: Partial<Record<Section, [string, string]>> = {
-  map: ['Подготовка планов зданий, этажей и рабочих мест.', 'Building, floor and workplace plans are in development.'],
-  reports: ['Подготовка инфраструктурных отчётов.', 'Infrastructure reporting is in development.'],
-  license: ['Подготовка управления лицензиями.', 'License management is in development.'],
-}
-
 const navigationGroups: Section[][] = [
-  ['dashboard', 'devices', 'map'],
-  ['software', 'agent', 'jobs', 'inventory', 'reports'],
-  ['users', 'audit', 'settings', 'license'],
+  ['dashboard', 'devices', 'inventory'],
+  ['software', 'jobs', 'agents', 'agent'],
+  ['users', 'audit', 'settings'],
 ]
 
 function Sidebar({ role, active, select, t }: {
@@ -95,16 +104,16 @@ function Sidebar({ role, active, select, t }: {
         return <button key={id} type="button" aria-current={active === id ? 'page' : undefined} onClick={() => select(id)}
           className="flex min-h-9 items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[0.82rem] font-medium transition-colors">
           <Icon className="size-4 shrink-0" aria-hidden /><span className="min-w-0 grow">{t(ru, en)}</span>
-          {inDevelopment[id] && <span className="shrink-0 text-[0.63rem] whitespace-nowrap text-slate-300">{t('В разработке', 'In dev')}</span>}
         </button>
       })}
     </div>)}
   </nav>
 }
 
-function Topbar({ navigate, session, t, logout, loggingOut, openMenu }: {
+function Topbar({ navigate, session, t, language, changeLanguage, logout, loggingOut, openMenu }: {
   navigate: (next: ConsoleRoute) => void; session: Session; t: Translate; logout: () => void
   loggingOut: boolean; openMenu: () => void
+  language: Language; changeLanguage: (language: Language) => void
 }) {
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme === 'light' ? 'light' : 'dark')
   const [search, setSearch] = useState('')
@@ -166,6 +175,10 @@ function Topbar({ navigate, session, t, logout, loggingOut, openMenu }: {
           {theme === 'dark' ? <Sun className="size-4" aria-hidden /> : <Moon className="size-4" aria-hidden />}
           {theme === 'dark' ? t('Светлая тема', 'Light theme') : t('Тёмная тема', 'Dark theme')}
         </button>
+        <button className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-muted" type="button"
+          onClick={() => { changeLanguage(language === 'ru' ? 'en' : 'ru'); close() }}>
+          <Languages className="size-4" aria-hidden />{language === 'ru' ? 'English' : 'Русский'}
+        </button>
         <a className="block rounded-lg px-2 py-2 text-sm hover:bg-muted" href="/api/docs">{t('Документация API', 'API documentation')}</a>
         <button className="w-full rounded-lg px-2 py-2 text-left text-sm text-danger hover:bg-danger-soft" type="button"
           disabled={loggingOut} onClick={() => { close(); logout() }}>{t('Выйти', 'Sign out')}</button>
@@ -174,9 +187,10 @@ function Topbar({ navigate, session, t, logout, loggingOut, openMenu }: {
   </header>
 }
 
-export function AppShell({ route, navigate, session, organization, t, logout, loggingOut, children }: {
+export function AppShell({ route, navigate, session, organization, t, language, changeLanguage, logout, loggingOut, children }: {
   route: ConsoleRoute; navigate: (next: ConsoleRoute) => void; session: Session; organization?: string
   t: Translate; logout: () => void; loggingOut: boolean; children: ReactNode
+  language: Language; changeLanguage: (language: Language) => void
 }) {
   const [mobileMenu, setMobileMenu] = useState(false)
   const [ru, en] = sections[route.section]
@@ -193,7 +207,7 @@ export function AppShell({ route, navigate, session, organization, t, logout, lo
       <div className="min-h-0 grow overflow-y-auto px-3 py-4">{navigation}</div>
       {organization && <p className="truncate border-t border-border px-5 py-4 text-xs" title={organization}>{organization}</p>}
     </aside>
-    <Topbar navigate={navigate} session={session} t={t} logout={logout} loggingOut={loggingOut} openMenu={() => setMobileMenu(true)} />
+    <Topbar navigate={navigate} session={session} t={t} language={language} changeLanguage={changeLanguage} logout={logout} loggingOut={loggingOut} openMenu={() => setMobileMenu(true)} />
     {mobileMenu && <Dialog title="DeployCore" close={() => setMobileMenu(false)} closeLabel={t('Закрыть', 'Close')} drawer>
       <div className="console-sidebar">{navigation}</div>
     </Dialog>}

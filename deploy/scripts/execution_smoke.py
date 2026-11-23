@@ -171,6 +171,15 @@ def exercise_execution(check, login, sql, base, context, version_id, composite_i
     agent(3, f"{target}/start", data=proof)
     agent(3, f"{target}/result", data={**pending, **proof})
     sql(f"UPDATE deployment_attempts SET reboot_deadline=clock_timestamp()-interval '1 second' WHERE id='{attempt}';")
+    scope = f"q=Catalog&scope=problem&operation=install&device_id={devices[3]}&direction=asc&limit=1"
+    problem = check("/deployments?" + scope, {200}, **viewer)[1]
+    assert problem["total"] == 1 and problem["problem"] >= 1 and problem["items"][0]["id"] == expired_job["id"]
+    assert check("/deployments?q=%25", {200}, **viewer)[1]["total"] == 0
+    check("/deployments?scope=unsupported", {422}, **viewer)
+    log = check(f'/deployments/{expired_job["id"]}/events?target_id={target}', {200}, **viewer)[1]
+    assert log and all(item["target_id"] == target and item["attempt_number"] == 1 for item in log)
+    revoked = check("/devices?q=EXEC&status=revoked&agent_version=0.3.4", {200}, **viewer)[1]
+    assert [item["id"] for item in revoked["items"]] == [devices[1]]
     assert agent(3, "poll")["recovery_required"]
     agent(3, f"{target}/reboot-result", expected=204, data={**proof, "detection": "installed"})
     expired_view = check(f'/deployments/{expired_job["id"]}', {200}, **viewer)[1]

@@ -189,11 +189,12 @@ def present(device: Device, agent: Agent, since: datetime) -> wire.DeviceView:
 @router.get("/devices", tags=["Devices"])
 def devices(
     db: Db, actor: Reader, q: Annotated[str, Query(max_length=120)] = "",
-    status: Literal["all", "online", "offline"] = "all",
+    status: Literal["all", "online", "offline", "revoked"] = "all",
     offset: Annotated[int, Query(ge=0, le=100000)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     sort: Literal["hostname", "status", "os", "agent", "last_seen"] = "hostname",
     direction: Literal["asc", "desc"] = "asc",
+    agent_version: Annotated[str, Query(min_length=1, max_length=64)] | None = None,
 ) -> wire.DevicePage:
     since = cutoff(db, clock())
     online = (Agent.revoked_at.is_(None)) & (Device.last_seen_at >= since)
@@ -204,8 +205,12 @@ def devices(
             Device.fqdn.icontains(term, autoescape=True),
             cast(Device.ips, Text).icontains(term, autoescape=True),
         ))
-    if status != "all":
+    if status == "revoked":
+        query = query.where(Agent.revoked_at.is_not(None))
+    elif status != "all":
         query = query.where(online if status == "online" else ~online)
+    if agent_version is not None:
+        query = query.where(Device.agent_version == agent_version)
     total = db.scalar(select(func.count()).select_from(query.subquery()))
     order_column = {
         "hostname": Device.hostname, "status": online, "os": Device.os_version,

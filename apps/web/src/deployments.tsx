@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ListTodo, Plus } from 'lucide-react'
 import { useRef, useState, type FormEvent } from 'react'
+import type { JobScope } from './console-shell'
 import { api, type Session } from './api'
 import { Dialog } from './components/ui/dialog'
 import { ActivityFeed, ConfirmDialog, EmptyState, LoadingSkeleton, SectionTitle, StatusBadge } from './design'
@@ -14,12 +15,12 @@ interface Job {
 }
 interface Target {
   id: string; hostname: string; state: TargetState; cancel_requested: boolean
-  attempt: number | null; lease_expires_at: string | null; recovery_required: boolean
+  retry_requires_admin?: boolean; attempt: number | null; lease_expires_at: string | null; recovery_required: boolean
   started_at?: string | null; process_started?: boolean | null; detection?: string | null
   reboot_detection?: string | null; reboot_deadline?: string | null; reboot_finished_at?: string | null; reboot_diagnostic?: string | null
   stage?: string; exit_code?: number | null; diagnostic?: string; output_bytes?: number | null
 }
-interface Entry { id: number; target_id: string | null; action: string; created_at: string }
+interface Entry { id: number; target_id: string | null; attempt_number?: number | null; action: string; created_at: string }
 interface Device { id: string; hostname: string; online: boolean; agent_revoked: boolean; agent_version: string }
 interface Product { id: string; name: string }
 interface Version { id: string; version: string; architecture: string; approved_at: string | null; install_args: string[]; uninstall_args: string[] | null; installer: string; detection: { kind: string }; timeout_seconds: number }
@@ -60,6 +61,7 @@ function diagnosis(code: string, t: Translate) {
     manifest_invalid: t('Не удалось получить допустимый манифест', 'Could not obtain a valid manifest'),
     process_error: t('Ошибка при запуске или наблюдении за процессом', 'Process launch or monitoring failed'),
     operator_resolved: t('Исход обработан вручную', 'Outcome resolved manually'),
+    device_removed: t('Устройство удалено', 'Device removed'),
   }
   return labels[code] ?? code
 }
@@ -223,9 +225,12 @@ function JobDetails({ session, t, id, back }: Props & { id: string; back: () => 
   const path = '/deployments/' + id
   const query = useQuery({ queryKey: ['deployments', id], queryFn: () => api<Job & { targets: Target[] }>(path), refetchInterval: 5000 })
   const [before, setBefore] = useState<number>()
+  const [eventTarget, setEventTarget] = useState('')
   const events = useQuery({
-    queryKey: ['deployment-events', id, before],
-    queryFn: () => api<Entry[]>(path + '/events' + (before ? '?before=' + before : '')),
+    queryKey: ['deployment-events', id, before, eventTarget],
+    queryFn: () => api<Entry[]>(path + '/events?' + new URLSearchParams({
+      ...(before ? { before: String(before) } : {}), ...(eventTarget ? { target_id: eventTarget } : {}),
+    })),
     refetchInterval: before ? false : 5000,
   })
   const [confirm, setConfirm] = useState(false)
@@ -266,7 +271,7 @@ function JobDetails({ session, t, id, back }: Props & { id: string; back: () => 
     awaiting_reboot: stateLabel('awaiting_reboot', t), reboot_required: stateLabel('reboot_required', t),
     reboot_verified: t('Результат подтверждён после перезагрузки', 'Result verified after restart'),
     reboot_timeout: diagnosis('reboot_timeout', t), detection_mismatch: diagnosis('detection_mismatch', t),
-    detection_failed: diagnosis('detection_failed', t),
+    detection_failed: diagnosis('detection_failed', t), device_removed: diagnosis('device_removed', t),
   }
   return <div className="grid gap-4">
     <Action secondary onClick={back}>{t('К очереди', 'Back to queue')}</Action>
@@ -301,19 +306,28 @@ function JobDetails({ session, t, id, back }: Props & { id: string; back: () => 
           {target.output_bytes != null && <span>{t('Вывод, байт', 'Output bytes')}: {target.output_bytes}</span>}
           {target.recovery_required && session.user.role === 'super_admin' &&
             <Action secondary onClick={() => setTargetAction({ id: target.id, type: 'resolve', key: crypto.randomUUID() })}>{t('Разрешить вручную', 'Resolve manually')}</Action>}
-          {target.state === 'failed' && session.user.role !== 'viewer' &&
+          {target.state === 'failed' && session.user.role !== 'viewer' && (!target.retry_requires_admin || session.user.role === 'super_admin') &&
             <Action secondary onClick={() => setTargetAction({ id: target.id, type: 'retry', key: crypto.randomUUID() })}>{t('Повторить', 'Retry')}</Action>}
         </div>
       </li>)}</ul>
     </Panel>}
     <Panel>
-      <SectionTitle title={t('История событий', 'Event history')} />
+      <SectionTitle title={t('Журнал развёртывания', 'Deployment log')} />
+      {!!job?.targets.length && <label className="mb-4 grid max-w-80 gap-2 text-sm">{t('События устройства', 'Device events')}
+        <select className="input" value={eventTarget} onChange={event => { setBefore(undefined); setEventTarget(event.target.value) }}>
+          <option value="">{t('Все устройства', 'All devices')}</option>
+          {job.targets.map(target => <option value={target.id} key={target.id}>{target.hostname}</option>)}
+        </select>
+      </label>}
       {events.isPending && <LoadingSkeleton label={t('Загрузка истории', 'Loading history')} />}
       <FormError message={events.error && errorMessage(events.error, t)} />
       {events.data?.length === 0 && <EmptyState title={t('Событий нет', 'No events')} />}
       {events.data && <ActivityFeed items={events.data.map(entry => ({
         key: entry.id, title: eventsLabels[entry.action] ?? entry.action,
-        detail: entry.target_id ? names.get(entry.target_id) : undefined, time: entry.created_at,
+        detail: [
+          entry.target_id ? names.get(entry.target_id) : undefined,
+          entry.attempt_number != null ? `${t('Попытка', 'Attempt')} ${entry.attempt_number}` : undefined,
+        ].filter(Boolean).join(' · '), time: entry.created_at,
       }))} />}
       <div className="mt-3 flex flex-wrap gap-2">
         {before && <Action secondary onClick={() => setBefore(undefined)}>{t('К последним', 'Latest')}</Action>}
@@ -334,27 +348,63 @@ function JobDetails({ session, t, id, back }: Props & { id: string; back: () => 
   </div>
 }
 
-export function DeploymentsPage({ session, t, preset, clearPreset }: Props & { preset?: DeploymentPreset; clearPreset: () => void }) {
-  const [selected, setSelected] = useState<string>()
+export function DeploymentsPage({ session, t, preset, clearPreset, scope = 'all', selected, targetDevice, onScope, onSelect, clearDevice }: Props & {
+  preset?: DeploymentPreset; clearPreset: () => void
+  scope?: JobScope; selected?: string; targetDevice?: string
+  onScope: (scope: JobScope) => void; onSelect: (id?: string) => void; clearDevice: () => void
+}) {
   const [creating, setCreating] = useState(Boolean(preset))
   const [offset, setOffset] = useState(0)
+  const [search, setSearch] = useState('')
+  const [term, setTerm] = useState('')
+  const [operation, setOperation] = useState<Operation | ''>('')
+  const [direction, setDirection] = useState<'asc' | 'desc'>('desc')
   const client = useQueryClient()
   const list = useQuery({
-    queryKey: ['deployments', 'list', offset], enabled: !selected, refetchInterval: 5000,
-    queryFn: () => api<{ items: Job[]; total: number }>(`/deployments?offset=${offset}&limit=${pageSize}`),
+    queryKey: ['deployments', 'list', offset, scope, targetDevice, operation, term, direction], enabled: !selected, refetchInterval: 5000,
+    queryFn: () => api<{ items: Job[]; total: number }>(`/deployments?${new URLSearchParams({
+      offset: String(offset), limit: String(pageSize), scope, direction, q: term,
+      ...(targetDevice ? { device_id: targetDevice } : {}), ...(operation ? { operation } : {}),
+    })}`),
   })
-  if (selected) return <JobDetails session={session} t={t} id={selected} back={() => setSelected(undefined)} />
+  if (selected) return <JobDetails key={selected} session={session} t={t} id={selected} back={() => onSelect()} />
   return <Panel>
     <SectionTitle title={t('Очередь развёртывания', 'Deployment queue')}
       description={t('Задания установки, обновления и удаления.', 'Install, upgrade and removal jobs.')}
       actions={session.user.role !== 'viewer' && <Action onClick={() => setCreating(true)}><Plus className="size-4" aria-hidden />{t('Новое задание', 'New job')}</Action>} />
+    <form className="mb-4 flex flex-wrap items-end gap-3" onSubmit={event => {
+      event.preventDefault(); setOffset(0); setTerm(search.trim())
+    }}>
+      <Field label={t('Программа или версия', 'Program or version')} maxLength={160} value={search} onChange={event => setSearch(event.target.value)} />
+      <label className="grid gap-2 text-sm">{t('Состояние', 'Status')}
+        <select className="input" value={scope} onChange={event => { setOffset(0); onScope(event.target.value as JobScope) }}>
+          <option value="all">{t('Все', 'All')}</option><option value="active">{t('Активные', 'Active')}</option>
+          <option value="problem">{t('Требуют внимания', 'Requires attention')}</option>
+        </select>
+      </label>
+      <label className="grid gap-2 text-sm">{t('Операция', 'Operation')}
+        <select className="input" value={operation} onChange={event => { setOffset(0); setOperation(event.target.value as Operation | '') }}>
+          <option value="">{t('Все', 'All')}</option>
+          <option value="install">{operationLabel('install', t)}</option><option value="uninstall">{operationLabel('uninstall', t)}</option>
+        </select>
+      </label>
+      <label className="grid gap-2 text-sm">{t('Порядок', 'Order')}
+        <select className="input" value={direction} onChange={event => { setOffset(0); setDirection(event.target.value === 'asc' ? 'asc' : 'desc') }}>
+          <option value="desc">{t('Сначала новые', 'Newest first')}</option><option value="asc">{t('Сначала старые', 'Oldest first')}</option>
+        </select>
+      </label>
+      <Action type="submit" secondary>{t('Поиск', 'Search')}</Action>
+      {targetDevice && <Action type="button" secondary onClick={() => { setOffset(0); clearDevice() }}>
+        {t('Сбросить фильтр устройства', 'Clear device filter')}
+      </Action>}
+    </form>
     {list.isPending && <LoadingSkeleton label={t('Загрузка очереди', 'Loading queue')} />}
     <FormError message={list.error && errorMessage(list.error, t)} />
-    {list.data?.items.length === 0 && <EmptyState icon={ListTodo} title={t('Заданий пока нет', 'No jobs yet')} />}
+    {list.data?.items.length === 0 && <EmptyState icon={ListTodo} title={term || scope !== 'all' || operation || targetDevice ? t('Задания по фильтру не найдены', 'No matching jobs') : t('Заданий пока нет', 'No jobs yet')} />}
     <ul className="divide-y divide-border">{list.data?.items.map(job => <li key={job.id} className="grid items-start gap-2 py-3 sm:grid-cols-2">
       <div>
         <button type="button" className="break-words text-left text-sm font-semibold text-primary hover:underline"
-          onClick={() => setSelected(job.id)}>{job.package_name} · {job.version}</button>
+          onClick={() => onSelect(job.id)}>{job.package_name} · {job.version}</button>
         <p className="mt-1 text-xs text-muted-foreground">{operationLabel(job.operation, t)} · {new Date(job.created_at).toLocaleString()}</p>
       </div>
       <JobProgress job={job} t={t} />
@@ -364,7 +414,7 @@ export function DeploymentsPage({ session, t, preset, clearPreset }: Props & { p
       <Action secondary disabled={offset + pageSize >= (list.data?.total ?? 0)} onClick={() => setOffset(offset + pageSize)}>{t('Следующая', 'Next')}</Action>
     </div>}
     {creating && <NewJob session={session} t={t} preset={preset} close={() => { setCreating(false); clearPreset() }} created={id => {
-      setCreating(false); clearPreset(); setSelected(id); void client.invalidateQueries({ queryKey: ['deployments'] })
+      setCreating(false); clearPreset(); onSelect(id); void client.invalidateQueries({ queryKey: ['deployments'] })
     }} />}
   </Panel>
 }
