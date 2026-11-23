@@ -33,6 +33,8 @@ export function FleetActivity({ items, t, warning }: { items: FleetEntry[]; t: T
     name_changed: t('Имя компьютера изменено', 'Hostname changed'),
     agent_revoked: t('Ключ агента отозван', 'Agent key revoked'),
     device_deleted: t('Компьютер удалён', 'Computer deleted'),
+    device_retired: t('Устройство снято с управления', 'Device retired'),
+    device_resumed: t('Управление возобновлено', 'Management resumed'),
     login_failed: t('Неудачный вход', 'Sign-in failed'),
   }
   return <ActivityFeed items={items.map((item, index) => ({

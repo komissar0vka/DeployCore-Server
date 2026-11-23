@@ -57,7 +57,7 @@ def create_preview(data: PreviewInput, request: Request, db: Db, actor: Operator
     db.execute(text("SELECT pg_advisory_xact_lock(7, hashtext(:key))"), {"key": str(actor.id)})
     device = db.get(Device, data.device_id, with_for_update=True)
     agent = db.get(Agent, data.device_id)
-    if device is None or device.deleted_at is not None or agent is None or agent.revoked_at is not None:
+    if device is None or device.deleted_at is not None or device.management_state != "managed" or agent is None or agent.revoked_at is not None:
         raise HTTPException(404, "device_not_found")
     if not supports_execution(device.agent_version, (0, 3, 5)):
         raise HTTPException(409, "deployment_agent_incompatible")

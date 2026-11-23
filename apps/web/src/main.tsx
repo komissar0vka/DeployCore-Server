@@ -9,6 +9,7 @@ import { Dashboard } from './dashboard'
 import { AgentInstallPage, DevicesPage } from './devices'
 import { LoadingSkeleton, StatusBadge } from './design'
 import { DeploymentsPage, type DeploymentPreset } from './deployments'
+import { LicensesPage } from './licenses'
 import { PackageCatalog } from './packages'
 import { Login, SetupWizard } from './setup'
 import { Action, FormError, errorMessage, Panel, translator, type Translate } from './ui'
@@ -152,6 +153,7 @@ function Console({ session, initialLanguage }: { session: Session; initialLangua
     {section === 'settings' && (settings.data
       ? <SettingsPage settings={settings.data} session={session} t={t} health={<HealthCard kind="ready" t={t} />} />
       : settings.error ? <FormError message={errorMessage(settings.error, t)} /> : <LoadingSkeleton label={t('Загрузка…', 'Loading…')} />)}
+    {section === 'licenses' && <LicensesPage session={session} t={t} />}
     {section === 'users' && <UsersPage session={session} t={t} />}
     {section === 'audit' && <AuditPage t={t} />}
   </AppShell>

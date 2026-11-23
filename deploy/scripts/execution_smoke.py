@@ -191,6 +191,7 @@ def exercise_execution(check, login, sql, base, context, version_id, composite_i
     agent(0, f'{active["target_id"]}/ack', data=proof)
     agent(0, f'{active["target_id"]}/start', data=proof)
     queued = check("/deployments", {201}, method="POST", data=job_payload(devices[0]), **operator)[1]
+    check(f"/devices/{devices[0]}/retire", {409}, method="POST", **admin)
     with ThreadPoolExecutor(max_workers=2) as pool:
         race = pool.submit(check, "/deployments", {201, 422}, method="POST",
                            data=job_payload(devices[0]), **operator)

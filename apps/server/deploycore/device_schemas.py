@@ -131,6 +131,7 @@ class DeviceView(Heartbeat):
     last_seen_at: datetime
     online: bool
     agent_revoked: bool
+    management_state: Literal["managed", "retired"] = "managed"
 
 
 class DevicePage(Wire):

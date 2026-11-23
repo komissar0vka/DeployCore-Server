@@ -62,6 +62,7 @@ function diagnosis(code: string, t: Translate) {
     process_error: t('Ошибка при запуске или наблюдении за процессом', 'Process launch or monitoring failed'),
     operator_resolved: t('Исход обработан вручную', 'Outcome resolved manually'),
     device_removed: t('Устройство удалено', 'Device removed'),
+    device_retired: t('Устройство снято с управления', 'Device retired'),
   }
   return labels[code] ?? code
 }
@@ -271,7 +272,7 @@ function JobDetails({ session, t, id, back }: Props & { id: string; back: () => 
     awaiting_reboot: stateLabel('awaiting_reboot', t), reboot_required: stateLabel('reboot_required', t),
     reboot_verified: t('Результат подтверждён после перезагрузки', 'Result verified after restart'),
     reboot_timeout: diagnosis('reboot_timeout', t), detection_mismatch: diagnosis('detection_mismatch', t),
-    detection_failed: diagnosis('detection_failed', t), device_removed: diagnosis('device_removed', t),
+    detection_failed: diagnosis('detection_failed', t), device_removed: diagnosis('device_removed', t), device_retired: diagnosis('device_retired', t),
   }
   return <div className="grid gap-4">
     <Action secondary onClick={back}>{t('К очереди', 'Back to queue')}</Action>

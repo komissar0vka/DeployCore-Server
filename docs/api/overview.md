@@ -77,3 +77,10 @@ Super Admin может утвердить загруженный MSI/EXE с не
 - `GET /deployments` принимает `q`, `scope=all|active|problem`, `operation`, `device_id`, `direction`, `offset` и `limit`. `total` учитывает фильтры, `active` и `problem` относятся ко всему экземпляру. Проблемные задания включают ошибки, неизвестные исходы и просроченные подтверждённые попытки или проверки после перезагрузки.
 - `GET /deployments/{job_id}/events` принимает `target_id` и курсор `before`, события попыток содержат `attempt_number`.
 - `GET /devices` принимает статус `revoked` и точное значение `agent_version`. `GET /packages` поддерживает сортировку по `name` и `publisher`, направление задаёт `direction`.
+
+## Локальная лицензия и управление устройствами
+
+- `GET /api/v1/licenses` возвращает UUID экземпляра, редакцию, лимит, количество управляемых устройств и состояние выдачи. Запрос доступен ролям с правом чтения.
+- `POST /api/v1/licenses/import` принимает конверт версии 1 размером до 24 КиБ с проверкой Origin и CSRF. Импорт доступен Super Admin.
+- `POST /api/v1/devices/{device_id}/retire` и `/resume` требуют Super Admin и CSRF. Фильтр `management_state=managed|retired` доступен в списке устройств.
+- Регистрация нового UUID и возобновление управления возвращают `409 license_limit_reached`, если мест нет. Восстановление управляемого UUID не занимает нового места.

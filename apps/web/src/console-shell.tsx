@@ -1,5 +1,5 @@
 import {
-  Bell, ChevronDown, ClipboardList, Languages, Layers3, LayoutDashboard, Radio,
+  Bell, ChevronDown, ClipboardList, KeyRound, Languages, Layers3, LayoutDashboard, Radio,
   ListChecks, Menu, Monitor, Moon, Package, Rocket, Settings2, Sun, Users, type LucideIcon,
 } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
@@ -21,6 +21,7 @@ export const sections = {
   users: ['Пользователи', 'Users', Users],
   audit: ['Журнал событий', 'Audit log', ClipboardList],
   settings: ['Настройки', 'Settings', Settings2],
+  licenses: ['Лицензия', 'License', KeyRound],
 } satisfies Record<string, [string, string, LucideIcon]>
 
 export type Section = keyof typeof sections
@@ -89,7 +90,7 @@ export function useConsoleRoute(role: Session['user']['role']) {
 const navigationGroups: Section[][] = [
   ['dashboard', 'devices', 'inventory'],
   ['software', 'jobs', 'agents', 'agent'],
-  ['users', 'audit', 'settings'],
+  ['users', 'audit', 'settings', 'licenses'],
 ]
 
 function Sidebar({ role, active, select, t }: {

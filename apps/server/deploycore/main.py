@@ -13,6 +13,7 @@ from .health import router as health_router
 from .execution_api import router as execution_router
 from .detection_api import router as detection_router
 from .job_api import router as job_router
+from .license_api import router as license_router
 from .package_api import router as package_router
 from .system_api import router as system_router
 
@@ -40,6 +41,7 @@ app.include_router(system_router)
 app.include_router(device_router)
 app.include_router(package_router)
 app.include_router(job_router)
+app.include_router(license_router)
 app.include_router(execution_router)
 app.include_router(detection_router)
 app.add_middleware(AgentBodyLimit)

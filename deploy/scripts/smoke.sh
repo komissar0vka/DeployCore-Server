@@ -7,6 +7,7 @@ export POSTGRES_PASSWORD="$(openssl rand -hex 32)"
 export DEPLOYCORE_SETUP_TOKEN="$(openssl rand -hex 32)"
 export DEPLOYCORE_PACKAGE_MAX_MIB=16
 export DEPLOYCORE_ENABLE_EXECUTION=1
+export DEPLOYCORE_LICENSE_TRUST=/tmp/deploycore-license-smoke-trust.json
 export DEPLOYCORE_PACKAGE_CA_FILE=/tmp/catalog-smoke-ca.pem
 export POSTGRES_USER=deploycore
 export POSTGRES_DB=deploycore
@@ -52,8 +53,8 @@ test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT
 test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT version_num FROM alembic_version")" = '0006_manual_approval'
 "${compose[@]}" up -d --no-build --wait --wait-timeout 120
 test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT instance_name FROM installation_settings WHERE id=1")" = 'Pre-catalog instance'
-test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT version_num FROM alembic_version")" = '0007_detection'
-echo 'Upgrade from 0002 through 0006 to 0007 preserved existing settings'
+test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT version_num FROM alembic_version")" = '0008_local_licensing'
+echo 'Upgrade from 0002 through 0006 to 0008 preserved existing settings'
 
 request --fail "$base/" > "$scratch/index.html"
 grep -q '<title>DeployCore' "$scratch/index.html"

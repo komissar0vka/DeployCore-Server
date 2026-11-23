@@ -748,6 +748,26 @@
               ],
               "title": "Agent Version"
             }
+          },
+          {
+            "name": "management_state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "managed",
+                    "retired"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Management State"
+            }
           }
         ],
         "responses": {
@@ -1033,6 +1053,88 @@
         ],
         "summary": "Revoke Agent",
         "operationId": "revoke_agent_api_v1_devices__device_id__agent_delete",
+        "security": [
+          {
+            "DeployCoreSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devices/{device_id}/retire": {
+      "post": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Retire",
+        "operationId": "retire_api_v1_devices__device_id__retire_post",
+        "security": [
+          {
+            "DeployCoreSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devices/{device_id}/resume": {
+      "post": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Resume",
+        "operationId": "resume_api_v1_devices__device_id__resume_post",
         "security": [
           {
             "DeployCoreSession": []
@@ -2355,6 +2457,78 @@
         }
       }
     },
+    "/api/v1/licenses": {
+      "get": {
+        "tags": [
+          "Licensing"
+        ],
+        "summary": "License Status",
+        "operationId": "license_status_api_v1_licenses_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LicenseView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeployCoreSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/licenses/import": {
+      "post": {
+        "tags": [
+          "Licensing"
+        ],
+        "summary": "Import License",
+        "operationId": "import_license_api_v1_licenses_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignedGrant"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LicenseView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeployCoreSession": []
+          }
+        ]
+      }
+    },
     "/api/v1/agent/{device_id}/jobs/{target_id}/manifest": {
       "get": {
         "tags": [
@@ -3347,6 +3521,15 @@
           "agent_revoked": {
             "type": "boolean",
             "title": "Agent Revoked"
+          },
+          "management_state": {
+            "type": "string",
+            "enum": [
+              "managed",
+              "retired"
+            ],
+            "title": "Management State",
+            "default": "managed"
           }
         },
         "additionalProperties": false,
@@ -4065,6 +4248,64 @@
           "cancel_requested"
         ],
         "title": "LeaseReply"
+      },
+      "LicenseView": {
+        "properties": {
+          "instance_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Instance Id"
+          },
+          "edition": {
+            "type": "string",
+            "enum": [
+              "free",
+              "business",
+              "enterprise"
+            ],
+            "title": "Edition"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "free",
+              "valid",
+              "grace",
+              "fallback"
+            ],
+            "title": "Status"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "managed": {
+            "type": "integer",
+            "title": "Managed"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "instance_id",
+          "edition",
+          "status",
+          "limit",
+          "managed"
+        ],
+        "title": "LicenseView"
       },
       "LoginInput": {
         "properties": {
@@ -4800,7 +5041,8 @@
                   "operator_resolved",
                   "detection_mismatch",
                   "reboot_timeout",
-                  "device_removed"
+                  "device_removed",
+                  "device_retired"
                 ]
               },
               {
@@ -5103,6 +5345,41 @@
         ],
         "title": "SetupStatus"
       },
+      "SignedGrant": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Version"
+          },
+          "kid": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,40}$",
+            "title": "Kid"
+          },
+          "payload": {
+            "type": "string",
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Payload"
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{86}$",
+            "title": "Signature"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "kid",
+          "payload",
+          "signature"
+        ],
+        "title": "SignedGrant"
+      },
       "Software": {
         "properties": {
           "name": {
@@ -5250,7 +5527,8 @@
                   "operator_resolved",
                   "detection_mismatch",
                   "reboot_timeout",
-                  "device_removed"
+                  "device_removed",
+                  "device_retired"
                 ]
               },
               {
@@ -5367,7 +5645,8 @@
                   "operator_resolved",
                   "detection_mismatch",
                   "reboot_timeout",
-                  "device_removed"
+                  "device_removed",
+                  "device_retired"
                 ]
               },
               {

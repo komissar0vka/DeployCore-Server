@@ -5,6 +5,7 @@ from deploycore.models import Base
 from deploycore import device_models  # Register device tables in Base.metadata.
 from deploycore import package_models  # Register catalog tables in Base.metadata.
 from deploycore import detection_models
+from deploycore import license_models
 from deploycore import job_models  # Register deployment tables in Base.metadata.
 
 

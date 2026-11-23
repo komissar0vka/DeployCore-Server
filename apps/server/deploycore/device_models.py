@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Index, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -10,6 +10,10 @@ from .models import Base
 
 class Device(Base):
     __tablename__ = "devices"
+    __table_args__ = (
+        CheckConstraint("management_state IN ('managed', 'retired')", name="device_management_state"),
+        Index("device_management_state_index", "management_state"),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
     hostname: Mapped[str] = mapped_column(String(253))
@@ -22,6 +26,7 @@ class Device(Base):
     uptime_seconds: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    management_state: Mapped[str] = mapped_column(String(12), server_default="managed")
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

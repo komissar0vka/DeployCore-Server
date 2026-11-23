@@ -10,6 +10,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, build_opener, HTTPSHandler, ProxyHandler
 
 from device_smoke import exercise_devices
+from license_smoke import clear_managed_fixture_devices, exercise_license
 from package_smoke import exercise_packages
 
 base, certificate, *compose = sys.argv[1:]
@@ -147,4 +148,7 @@ print("Setup race, migrations on restart, session security, roles, login limits,
 
 exercise_devices(check, login, sql, compose, admin_cookie, csrf, password)
 
-exercise_packages(check, login, sql, compose, base, context, {"cookie": admin_cookie, "csrf": csrf})
+admin_auth = {"cookie": admin_cookie, "csrf": csrf}
+clear_managed_fixture_devices(check, admin_auth)
+exercise_license(check, login, compose, admin_auth)
+exercise_packages(check, login, sql, compose, base, context, admin_auth)

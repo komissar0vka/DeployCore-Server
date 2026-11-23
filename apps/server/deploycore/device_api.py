@@ -6,17 +6,19 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import Text, cast, delete, func, insert, or_, select, text, update
+from sqlalchemy import Text, cast, delete, func, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from . import device_schemas as wire
 from .device_models import Agent, Device, DeviceEvent, DeviceInventory, EnrollmentToken, InstalledSoftware
+from .license_api import ensure_slot, state_for
 from .models import AuditEvent, Installation, User
 from .security import Db, Permission, audit, digest, require
 
 router = APIRouter(prefix="/api/v1")
 Reader = Annotated[User, Depends(require(Permission.READ))]
 Operator = Annotated[User, Depends(require(Permission.MANAGE_OPERATIONS))]
+SystemAdmin = Annotated[User, Depends(require(Permission.MANAGE_SYSTEM))]
 agent_bearer = HTTPBearer(auto_error=False, scheme_name="DeployCoreAgent")
 Bearer = Annotated[HTTPAuthorizationCredentials | None, Security(agent_bearer)]
 
@@ -63,7 +65,7 @@ def require_agent(device_id: UUID, db: Db, bearer: Bearer) -> Device:
         raise HTTPException(401, "agent_unauthorized")
     device = db.get(Device, device_id, with_for_update=True)
     agent = db.get(Agent, device_id)
-    if (device is None or device.deleted_at is not None or agent is None or agent.revoked_at is not None
+    if (device is None or device.deleted_at is not None or device.management_state != "managed" or agent is None or agent.revoked_at is not None
             or not secrets.compare_digest(agent.credential_hash, digest(bearer.credentials))):
         raise HTTPException(401, "agent_unauthorized")
     return device
@@ -84,15 +86,14 @@ def enroll(data: wire.Enroll, db: Db) -> wire.Connection:
     if target_id is not None and target_id != data.installation_id:
         raise HTTPException(409, "registration_conflict")
     device_id = data.installation_id
-    if target_id is None:
-        db.execute(text("SELECT pg_advisory_xact_lock(492403, hashtext(:device))"), {"device": str(device_id)})
+    quota = state_for(db, lock=True) if target_id is None else None
     device = db.get(Device, device_id, with_for_update=True)
     token = db.get_one(EnrollmentToken, token_id, with_for_update=True)
     now = clock()
     if token.revoked_at is not None or token.expires_at <= now:
         raise HTTPException(403, "enrollment_invalid")
     prior = db.get(Agent, device_id)
-    if device is not None and device.deleted_at is not None:
+    if device is not None and (device.deleted_at is not None or device.management_state != "managed"):
         raise HTTPException(409, "registration_conflict")
     if prior is not None and prior.enrollment_id == token.id and prior.revoked_at is None:
         if secrets.compare_digest(prior.credential_hash, credential_hash):
@@ -107,6 +108,7 @@ def enroll(data: wire.Enroll, db: Db) -> wire.Connection:
     if target_id is None:
         if device is not None:
             raise HTTPException(409, "registration_conflict")
+        ensure_slot(db, quota)
         device = Device(id=device_id, last_seen_at=now, **metadata)
         db.add(device)
         db.flush()
@@ -182,7 +184,8 @@ def report_agent_issue(data: wire.AgentIssue, db: Db, device: AgentDevice) -> No
 def present(device: Device, agent: Agent, since: datetime) -> wire.DeviceView:
     return wire.DeviceView(
         **wire.Heartbeat.model_validate(device).model_dump(), id=device.id, last_seen_at=device.last_seen_at,
-        online=agent.revoked_at is None and device.last_seen_at >= since, agent_revoked=agent.revoked_at is not None,
+        online=device.management_state == "managed" and agent.revoked_at is None and device.last_seen_at >= since,
+        agent_revoked=agent.revoked_at is not None, management_state=device.management_state,
     )
 
 
@@ -195,10 +198,13 @@ def devices(
     sort: Literal["hostname", "status", "os", "agent", "last_seen"] = "hostname",
     direction: Literal["asc", "desc"] = "asc",
     agent_version: Annotated[str, Query(min_length=1, max_length=64)] | None = None,
+    management_state: Literal["managed", "retired"] | None = None,
 ) -> wire.DevicePage:
     since = cutoff(db, clock())
-    online = (Agent.revoked_at.is_(None)) & (Device.last_seen_at >= since)
+    online = (Device.management_state == "managed") & Agent.revoked_at.is_(None) & (Device.last_seen_at >= since)
     query = select(Device, Agent).join(Agent, Agent.device_id == Device.id).where(Device.deleted_at.is_(None))
+    if management_state is not None:
+        query = query.where(Device.management_state == management_state)
     if (term := q.strip()):
         query = query.where(or_(
             Device.hostname.icontains(term, autoescape=True),
@@ -208,7 +214,7 @@ def devices(
     if status == "revoked":
         query = query.where(Agent.revoked_at.is_not(None))
     elif status != "all":
-        query = query.where(online if status == "online" else ~online)
+        query = query.where(online if status == "online" else (Device.management_state == "managed") & ~online)
     if agent_version is not None:
         query = query.where(Device.agent_version == agent_version)
     total = db.scalar(select(func.count()).select_from(query.subquery()))
@@ -230,7 +236,7 @@ def fleet_summary(db: Db, actor: Reader) -> wire.FleetSummary:
     counts = db.execute(
         select(Device.agent_version, func.count(), func.count().filter(online))
         .join(Agent, Agent.device_id == Device.id)
-        .where(Device.deleted_at.is_(None)).group_by(Device.agent_version).order_by(Device.agent_version)
+        .where(Device.deleted_at.is_(None), Device.management_state == "managed").group_by(Device.agent_version).order_by(Device.agent_version)
     ).all()
     recent = select(DeviceEvent, Device.hostname).join(Device, Device.id == DeviceEvent.device_id)
     recent = recent.order_by(DeviceEvent.id.desc()).limit(10)
@@ -283,6 +289,8 @@ def list_tokens(db: Db, actor: Operator, offset: Annotated[int, Query(ge=0, le=1
 def create_token(data: wire.TokenInput, request: Request, db: Db, actor: Operator) -> wire.IssuedToken:
     if data.device_id is not None:
         device = live_device(db, data.device_id, lock=True)
+        if device.management_state != "managed":
+            raise HTTPException(409, "device_retired")
         revoke_recovery_tokens(db, device.id, clock())
         record_event(db, device, "recovery_issued", actor)
     raw = secrets.token_urlsafe(32)
@@ -332,6 +340,7 @@ def revoke_agent(device_id: UUID, request: Request, db: Db, actor: Operator) -> 
 
 @router.delete("/devices/{device_id}", tags=["Devices"], status_code=204, response_class=Response)
 def delete_device(device_id: UUID, request: Request, db: Db, actor: Operator) -> None:
+    state_for(db, lock=True)
     device = live_device(db, device_id, lock=True)
     agent = db.get_one(Agent, device.id)
     now = clock()
@@ -339,6 +348,7 @@ def delete_device(device_id: UUID, request: Request, db: Db, actor: Operator) ->
 
     cancel_deleted_device_targets(db, device.id)
     device.deleted_at = now
+    device.management_state = "retired"
     agent.revoked_at = agent.revoked_at or now
     revoke_recovery_tokens(db, device.id, now)
     db.execute(delete(InstalledSoftware).where(InstalledSoftware.device_id == device.id))
@@ -346,4 +356,41 @@ def delete_device(device_id: UUID, request: Request, db: Db, actor: Operator) ->
     device.ips = []
     record_event(db, device, "device_deleted", actor)
     audit(db, request, "device_deleted", actor=actor, details={"device_id": str(device.id)})
+    db.commit()
+
+
+@router.post("/devices/{device_id}/retire", tags=["Devices"], status_code=204, response_class=Response)
+def retire(device_id: UUID, request: Request, db: Db, actor: SystemAdmin) -> None:
+    from .job_api import ACTIVE, cancel_deleted_device_targets
+    from .job_models import DeploymentTarget
+
+    state_for(db, lock=True)
+    device = live_device(db, device_id, lock=True)
+    if device.management_state == "managed":
+        unresolved = db.scalar(select(DeploymentTarget.id).where(
+            DeploymentTarget.device_id == device.id,
+            DeploymentTarget.state.in_(tuple(state for state in ACTIVE if state != "leased")),
+        ).limit(1))
+        if unresolved is not None:
+            raise HTTPException(409, "device_execution_unresolved")
+        cancel_deleted_device_targets(db, device.id, diagnostic="device_retired")
+        now = clock()
+        agent = db.get_one(Agent, device.id)
+        agent.revoked_at = agent.revoked_at or now
+        revoke_recovery_tokens(db, device.id, now)
+        device.management_state = "retired"
+        record_event(db, device, "device_retired", actor)
+        audit(db, request, "device_retired", actor=actor, details={"device_id": str(device.id)})
+    db.commit()
+
+
+@router.post("/devices/{device_id}/resume", tags=["Devices"], status_code=204, response_class=Response)
+def resume(device_id: UUID, request: Request, db: Db, actor: SystemAdmin) -> None:
+    quota = state_for(db, lock=True)
+    device = live_device(db, device_id, lock=True)
+    if device.management_state == "retired":
+        ensure_slot(db, quota)
+        device.management_state = "managed"
+        record_event(db, device, "device_resumed", actor)
+        audit(db, request, "device_resumed", actor=actor, details={"device_id": str(device.id)})
     db.commit()

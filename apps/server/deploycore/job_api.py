@@ -131,7 +131,7 @@ def create_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) -
     # Device operations and agent requests acquire the device lock before target/package locks.
     devices = list(db.execute(
         select(Device.id, Device.agent_version).join(Agent, Agent.device_id == Device.id)
-        .where(Device.id.in_(data.device_ids), Device.deleted_at.is_(None), Agent.revoked_at.is_(None))
+        .where(Device.id.in_(data.device_ids), Device.deleted_at.is_(None), Device.management_state == "managed", Agent.revoked_at.is_(None))
         .order_by(Device.id).with_for_update(of=Device)
     ))
     revoked = db.scalar(select(Agent.device_id).where(
@@ -511,8 +511,8 @@ def submit_reboot_result(target_id: UUID, data: wire.RebootResult, request: Requ
         raise HTTPException(410, "deployment_attempt_closed")
 
 
-def cancel_deleted_device_targets(db: Db, device_id: UUID) -> None:
-    """Close work that can no longer be delivered to a permanently deleted device."""
+def cancel_deleted_device_targets(db: Db, device_id: UUID, *, diagnostic: wire.Diagnostic = "device_removed") -> None:
+    """Close work that can no longer be delivered to the device."""
     targets = db.scalars(select(Target).where(
         Target.device_id == device_id, Target.state.in_(("queued", "leased", "running")),
     ).order_by(Target.id).with_for_update())
@@ -521,9 +521,9 @@ def cancel_deleted_device_targets(db: Db, device_id: UUID) -> None:
         attempt = last_attempt(db, target.id)
         if attempt is not None and attempt.started_at is not None:
             target.state = "unknown"
-            attempt.finished_at, attempt.outcome, attempt.diagnostic = now, "unknown", "device_removed"
+            attempt.finished_at, attempt.outcome, attempt.diagnostic = now, "unknown", diagnostic
         else:
             target.state = "cancelled"
             if attempt is not None and attempt.finished_at is None:
-                attempt.finished_at, attempt.outcome, attempt.diagnostic = now, "cancelled", "device_removed"
-        event(db, target.job_id, "device_removed", target, attempt)
+                attempt.finished_at, attempt.outcome, attempt.diagnostic = now, "cancelled", diagnostic
+        event(db, target.job_id, diagnostic, target, attempt)

@@ -10,6 +10,7 @@ from urllib.request import Request, build_opener, HTTPSHandler, ProxyHandler
 
 from deployment_smoke import exercise_deployments
 from execution_smoke import exercise_execution
+from license_smoke import clear_managed_fixture_devices
 
 
 def exercise_packages(check, login, sql, compose, base, context, admin):
@@ -167,7 +168,10 @@ def exercise_packages(check, login, sql, compose, base, context, admin):
     assert stored[signed["id"]]["approved_at"] == approval["approved_at"]
     downloaded, _ = request("/api/v1" + artifact_url, headers={"Cookie": operator_cookie})
     assert hashlib.sha256(downloaded).hexdigest() == record["sha256"]
+    fallback = check("/licenses", {200}, **admin)[1]
+    assert (fallback["status"], fallback["limit"]) == ("fallback", 5)
     exercise_deployments(check, login, sql, compose, signed["id"], admin)
+    clear_managed_fixture_devices(check, admin)
     assert stored[version["id"]] == manual
     exercise_execution(check, login, sql, base, context, version["id"], composite["id"], group, admin)
     sql(f"""

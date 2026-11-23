@@ -21,6 +21,7 @@ interface Device {
   last_seen_at: string
   online: boolean
   agent_revoked: boolean
+  management_state?: "managed" | "retired"
 }
 
 interface DeviceDetail {
@@ -57,6 +58,7 @@ const stamp = (value: string) => new Date(value).toLocaleString(document.documen
 const gib = (bytes: number) => (bytes / 1024 ** 3).toLocaleString(document.documentElement.lang, { maximumFractionDigits: 1 })
 
 function DeviceStatus({ device, t }: { device: Device; t: Translate }) {
+  if (device.management_state === 'retired') return <StatusBadge>{t('Снято с управления', 'Retired')}</StatusBadge>
   return <StatusBadge tone={device.online ? 'success' : device.agent_revoked ? 'warning' : 'danger'}>
     {device.agent_revoked ? t('Ключ отозван', 'Revoked') : device.online ? t('Онлайн', 'Online') : t('Офлайн', 'Offline')}
   </StatusBadge>
@@ -97,16 +99,17 @@ export function DevicesPage({ session, t, openInstaller, initialSearch = '', ini
   const term = initialSearch
   const status = initialStatus
   const [page, setPage] = useState(0)
+  const [management, setManagement] = useState('')
   const [sort, setSort] = useState<{ key: SortKey; direction: 'asc' | 'desc' }>({ key: 'hostname', direction: 'asc' })
   const [display, setDisplay] = useState<'auto' | 'table' | 'cards'>('auto')
   const [selection, setSelection] = useState(new Map<string, string>())
   const [copyStatus, setCopyStatus] = useState('')
   const fleet = useFleetSummary()
   const devices = useQuery({
-    queryKey: ['devices', term, status, page, sort.key, sort.direction, agentVersion], enabled: !selected,
+    queryKey: ['devices', term, status, page, sort.key, sort.direction, agentVersion, management], enabled: !selected,
     refetchInterval: monitoring ? 15_000 : false,
     queryFn: () => api<{ items: Device[]; total: number }>(`/devices?${new URLSearchParams({
-      q: term, status, ...(agentVersion ? { agent_version: agentVersion } : {}), offset: String(page * pageSize), limit: String(pageSize), sort: sort.key, direction: sort.direction,
+      q: term, status, ...(agentVersion ? { agent_version: agentVersion } : {}), ...(management ? { management_state: management } : {}), offset: String(page * pageSize), limit: String(pageSize), sort: sort.key, direction: sort.direction,
     })}`),
   })
   if (selected) return <Computer key={selected} id={selected} session={session} t={t} back={() => onSelect()} inventory={inventory} openHistory={openHistory} onSoftware={onSoftware} />
@@ -187,6 +190,13 @@ export function DevicesPage({ session, t, openInstaller, initialSearch = '', ini
             <option value="revoked">{t('Ключ отозван', 'Revoked')}</option>
           </select>
         </label>
+        <label className="grid min-w-0 gap-2 text-sm">{t('Управление', 'Management')}
+          <select className="input" value={management} onChange={event => { setManagement(event.target.value); setPage(0) }}>
+            <option value="">{t('Все', 'All')}</option>
+            <option value="managed">{t('Управляемые', 'Managed')}</option>
+            <option value="retired">{t('Снятые с управления', 'Retired')}</option>
+          </select>
+        </label>
         {monitoring && <label className="grid min-w-0 gap-2 text-sm">{t('Версия агента', 'Agent version')}
           <select className="input" value={agentVersion ?? ''} disabled={fleet.isPending} onChange={event => onFilter(term, status, event.target.value || undefined)}>
             <option value="">{t('Все версии', 'All versions')}</option>
@@ -218,9 +228,9 @@ export function DevicesPage({ session, t, openInstaller, initialSearch = '', ini
       {devices.isPending && <LoadingSkeleton label={t('Загрузка…', 'Loading…')} />}
       <FormError message={devices.error && errorMessage(devices.error, t)} />
       {devices.data?.items.length === 0 && <EmptyState icon={Monitor}
-        title={term || status !== 'all' || agentVersion ? t('Нет устройств по выбранным условиям', 'No devices match the selected filters') : t('Устройств пока нет', 'No devices yet')}
-        action={term || status !== 'all' || agentVersion
-          ? <Action secondary onClick={() => onFilter('', 'all')}>{t('Сбросить фильтры', 'Clear filters')}</Action>
+        title={term || status !== 'all' || agentVersion || management ? t('Нет устройств по выбранным условиям', 'No devices match the selected filters') : t('Устройств пока нет', 'No devices yet')}
+        action={term || status !== 'all' || agentVersion || management
+          ? <Action secondary onClick={() => { setManagement(''); setPage(0); onFilter('', 'all') }}>{t('Сбросить фильтры', 'Clear filters')}</Action>
           : session.user.role !== 'viewer' ? <Action secondary onClick={openInstaller}>{t('Установка агента', 'Agent installation')}</Action> : undefined} />}
       {!!items.length && <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -305,7 +315,7 @@ function Computer({ id, session, t, back, inventory, openHistory, onSoftware }: 
   const [softwareFilter, setSoftwareFilter] = useState('')
   const [softwarePage, setSoftwarePage] = useState(0)
   const [tab, setTab] = useState<'overview' | 'hardware' | 'software' | 'management' | 'events'>(inventory ? 'hardware' : 'overview')
-  const [confirmation, setConfirmation] = useState<'revoke' | 'delete' | null>(null)
+  const [confirmation, setConfirmation] = useState<'revoke' | 'delete' | 'retire' | 'resume' | null>(null)
   const tabs = [
     ['overview', t('Обзор', 'Overview')],
     ['hardware', t('Оборудование', 'Hardware')],
@@ -315,10 +325,15 @@ function Computer({ id, session, t, back, inventory, openHistory, onSoftware }: 
   ] as const
   const writable = session.user.role !== 'viewer'
   const action = useMutation({
-    mutationFn: (action: 'revoke' | 'delete') => api<void>(`/devices/${id}${action === 'revoke' ? '/agent' : ''}`, { method: 'DELETE', csrf: session.csrf_token }),
+    mutationFn: (action: 'revoke' | 'delete' | 'retire' | 'resume') => {
+      const lifecycle = action === 'retire' || action === 'resume'
+      const suffix = lifecycle ? '/' + action : action === 'revoke' ? '/agent' : ''
+      return api<void>(`/devices/${id}${suffix}`, { method: lifecycle ? 'POST' : 'DELETE', csrf: session.csrf_token })
+    },
     onSuccess: (_, action) => {
       void queryClient.invalidateQueries({ queryKey: ['devices'] })
       void queryClient.invalidateQueries({ queryKey: ['fleet-summary'] })
+      void queryClient.invalidateQueries({ queryKey: ['license'] })
       if (action === 'delete') back()
       else {
         setSecret(null)
@@ -350,6 +365,7 @@ function Computer({ id, session, t, back, inventory, openHistory, onSoftware }: 
   const programs = computer?.software.filter(program =>
     [program.name, program.version, program.publisher].some(value => value.toLowerCase().includes(term))) ?? []
   const eventNames: Record<string, string> = {
+    device_retired: t('Снято с управления', 'Retired'), device_resumed: t('Управление возобновлено', 'Management resumed'),
     registered: t('Зарегистрирован', 'Registered'), reconnected: t('Связь восстановлена', 'Reconnected'),
     inventory_failed: t('Ошибка инвентаризации', 'Inventory refresh failed'),
     name_changed: t('Имя изменено', 'Hostname changed'), inventory_updated: t('Инвентаризация обновлена', 'Inventory updated'),
@@ -370,10 +386,14 @@ function Computer({ id, session, t, back, inventory, openHistory, onSoftware }: 
           {writable && <Dropdown label={t('Действия устройства', 'Device actions')} trigger={<MoreHorizontal className="size-5" aria-hidden />}>
             {close => <div className="grid gap-1">
               <button className="rounded-md px-2 py-2 text-left text-sm hover:bg-muted disabled:opacity-50" type="button"
-                disabled={issuing || !!secret || action.isPending} onClick={() => { close(); void recover() }}>{t('Выдать токен восстановления', 'Issue recovery token')}</button>
+                disabled={issuing || !!secret || action.isPending || computer.device.management_state === 'retired'} onClick={() => { close(); void recover() }}>{t('Выдать токен восстановления', 'Issue recovery token')}</button>
               <button className="rounded-md px-2 py-2 text-left text-sm hover:bg-muted disabled:opacity-50" type="button"
                 disabled={action.isPending || issuing || computer.device.agent_revoked}
                 onClick={() => { close(); setConfirmation('revoke') }}>{t('Отозвать ключ', 'Revoke credential')}</button>
+              {session.user.role === 'super_admin' && <button type="button" className="rounded-md px-2 py-2 text-left text-sm hover:bg-muted"
+                disabled={action.isPending || issuing} onClick={() => {
+                  close(); setConfirmation(computer.device.management_state === 'retired' ? 'resume' : 'retire')
+                }}>{computer.device.management_state === 'retired' ? t('Возобновить управление', 'Resume management') : t('Снять с управления', 'Retire device')}</button>}
               <button className="rounded-md px-2 py-2 text-left text-sm text-danger hover:bg-danger-soft disabled:opacity-50" type="button"
                 disabled={action.isPending || issuing} onClick={() => { close(); setConfirmation('delete') }}>{t('Удалить устройство', 'Delete device')}</button>
             </div>}
@@ -392,10 +412,15 @@ function Computer({ id, session, t, back, inventory, openHistory, onSoftware }: 
         <FormError message={problem || (action.error && errorMessage(action.error, t))} />
       </Panel>
       {confirmation && <ConfirmDialog
-        title={confirmation === 'revoke' ? t('Отозвать ключ?', 'Revoke the credential?') : t('Удалить устройство?', 'Delete the device?')}
+        title={{
+          revoke: t('Отозвать ключ?', 'Revoke the credential?'), delete: t('Удалить устройство?', 'Delete the device?'),
+          retire: t('Снять устройство с управления?', 'Retire this device?'), resume: t('Возобновить управление?', 'Resume management?'),
+        }[confirmation]}
         labels={{ close: t('Закрыть', 'Close'), cancel: t('Отмена', 'Cancel'), confirm: t('Подтвердить', 'Confirm') }}
         description={confirmation === 'revoke'
           ? t(`Агент на ${computer.device.hostname} потеряет доступ до восстановления ключа.`, `The agent on ${computer.device.hostname} loses access until its credential is recovered.`)
+          : confirmation === 'retire' ? t('Место освободится, ключ будет отозван, а инвентарь и история сохранятся.', 'This releases the slot and revokes the credential while keeping inventory and history.')
+          : confirmation === 'resume' ? t('Устройство займёт место. Для подключения выдайте токен восстановления.', 'The device occupies a slot. Issue a recovery token to reconnect it.')
           : t(`Устройство ${computer.device.hostname} и его инвентарь будут удалены.`, `Device ${computer.device.hostname} and its inventory will be deleted.`)}
         close={() => setConfirmation(null)} confirm={() => { action.mutate(confirmation); setConfirmation(null) }} />}
       {tab === 'overview' && <Panel>
@@ -444,7 +469,7 @@ function Computer({ id, session, t, back, inventory, openHistory, onSoftware }: 
       {tab === 'management' && <Panel>
         <SectionTitle title={t('Управление ПО', 'Software management')}
           actions={<Action secondary onClick={() => openHistory(id)}>{t('История развёртываний', 'Deployment history')}</Action>} />
-        {writable && !computer.device.agent_revoked
+        {writable && !computer.device.agent_revoked && computer.device.management_state !== 'retired'
           ? <Action onClick={() => onSoftware(id, computer.device.hostname)}>{t('Создать задание для этого ПК', 'Create a job for this computer')}</Action>
           : <EmptyState title={t('Создание заданий недоступно', 'Job creation unavailable')} />}
       </Panel>}
