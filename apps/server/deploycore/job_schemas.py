@@ -16,7 +16,7 @@ Outcome = Literal["not_executed", "cancelled", "failed", "succeeded", "already_i
                   "already_absent", "reboot_required", "unknown"]
 Diagnostic = Literal["download_failed", "hash_mismatch", "insufficient_space", "detection_failed", "installer_error",
                      "timeout", "interrupted", "platform_unsupported", "manifest_invalid", "process_error",
-                     "operator_resolved", "detection_mismatch", "reboot_timeout"]
+                     "operator_resolved", "detection_mismatch", "reboot_timeout", "device_removed"]
 
 
 class JobInput(Wire):

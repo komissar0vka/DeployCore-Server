@@ -4653,7 +4653,8 @@
                   "process_error",
                   "operator_resolved",
                   "detection_mismatch",
-                  "reboot_timeout"
+                  "reboot_timeout",
+                  "device_removed"
                 ]
               },
               {
@@ -5097,7 +5098,8 @@
                   "process_error",
                   "operator_resolved",
                   "detection_mismatch",
-                  "reboot_timeout"
+                  "reboot_timeout",
+                  "device_removed"
                 ]
               },
               {
@@ -5213,7 +5215,8 @@
                   "process_error",
                   "operator_resolved",
                   "detection_mismatch",
-                  "reboot_timeout"
+                  "reboot_timeout",
+                  "device_removed"
                 ]
               },
               {

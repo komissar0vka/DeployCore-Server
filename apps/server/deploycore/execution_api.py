@@ -68,8 +68,11 @@ def manifest(target_id: UUID, attempt_id: UUID, request: Request, db: Db, device
 def download(target_id: UUID, attempt_id: UUID, request: Request, db: Db, device: AgentDevice):
     _, _, _, version, artifact, _, _ = permitted(db, device, target_id, attempt_id, request)
     path = artifact_path(version.id)
-    if not path.is_file() or path.stat().st_size != artifact.size_bytes:
-        raise HTTPException(503, "package_storage_unavailable")
+    try:
+        if not path.is_file() or path.stat().st_size != artifact.size_bytes:
+            raise HTTPException(503, "package_storage_unavailable")
+    except OSError as exc:
+        raise HTTPException(503, "package_storage_unavailable") from exc
     db.commit()
     return FileResponse(path, media_type="application/octet-stream", headers={"X-DeployCore-SHA256": artifact.sha256})
 

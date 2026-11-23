@@ -330,6 +330,9 @@ def delete_device(device_id: UUID, request: Request, db: Db, actor: Operator) ->
     device = live_device(db, device_id, lock=True)
     agent = db.get_one(Agent, device.id)
     now = clock()
+    from .job_api import cancel_deleted_device_targets
+
+    cancel_deleted_device_targets(db, device.id)
     device.deleted_at = now
     agent.revoked_at = agent.revoked_at or now
     revoke_recovery_tokens(db, device.id, now)

@@ -60,7 +60,7 @@ type JobTransport struct {
 
 func (t *JobTransport) capabilities() string {
 	if t.detect != nil {
-		return "execute_v1, detection_v1"
+		return "execute_v1, detection_v1, closed_result_v1"
 	}
 	if t.execute != nil {
 		return "execute_v1"
@@ -168,7 +168,7 @@ func (t *JobTransport) step(ctx context.Context) error {
 	}{next.Job.AttemptID, ExecutionResult{Outcome: next.Outcome, Diagnostic: next.Diagnostic,
 		ExitCode: next.ExitCode, OutputBytes: next.OutputBytes, Detection: next.Detection, ProcessStarted: next.ProcessStarted, RebootPending: next.Reboot != nil}}
 	if err := t.request(ctx, http.MethodPost, path+"result", result, nil); err != nil {
-		return err
+		return t.handleClosedAttempt(err)
 	}
 	if next.Reboot != nil {
 		pending := *next.Reboot
@@ -325,12 +325,17 @@ func (t *JobTransport) recheck(ctx context.Context, path string) error {
 		Detection *DetectionState `json:"detection"`
 	}{next.Job.AttemptID, pending.Observation}
 	if err := t.request(ctx, http.MethodPost, path+"reboot-result", result, nil); err != nil {
-		var status StatusError
-		if !errors.As(err, &status) || (status != http.StatusConflict && status != http.StatusNotFound) {
-			return err
-		}
-		t.log.Printf("Post-restart verification closed by server: %s %v", next.Job.TargetID, err)
+		return t.handleClosedAttempt(err)
 	}
+	return t.persist(JobJournal{})
+}
+
+func (t *JobTransport) handleClosedAttempt(err error) error {
+	var status StatusError
+	if !errors.As(err, &status) || status != http.StatusGone {
+		return err
+	}
+	t.log.Printf("Deployment attempt closed before the result was accepted: %s", t.journal.Job.AttemptID)
 	return t.persist(JobJournal{})
 }
 

@@ -195,6 +195,7 @@ def approve_version(package_id: UUID, version_id: UUID, request: Request, db: Db
     artifact = db.get(PackageArtifact, version_id)
     if artifact is None or artifact.signature != "verified":
         raise HTTPException(409, "package_signature_required")
+    verify_stored_digest(version_id, artifact.sha256)
     return record_approval(db, request, actor, version, artifact, "authenticode")
 
 
@@ -208,14 +209,18 @@ def approve_manual(package_id: UUID, version_id: UUID, data: wire.ManualApproval
         raise HTTPException(409, "package_manual_approval_unavailable")
     if data.sha256.lower() != artifact.sha256:
         raise HTTPException(409, "package_approval_hash_mismatch")
+    verify_stored_digest(version_id, artifact.sha256)
+    return record_approval(db, request, actor, version, artifact, "manual")
+
+
+def verify_stored_digest(version_id: UUID, expected: str) -> None:
     try:
         with storage.artifact_path(version_id).open("rb") as source:
             digest = hashlib.file_digest(source, "sha256").hexdigest()
     except OSError as exc:
         raise HTTPException(503, "package_storage_unavailable") from exc
-    if digest != artifact.sha256:
+    if digest != expected:
         raise HTTPException(409, "package_approval_hash_mismatch")
-    return record_approval(db, request, actor, version, artifact, "manual")
 
 
 def record_approval(db: Db, request: Request, actor: User, version: SoftwareVersion,

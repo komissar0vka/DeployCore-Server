@@ -164,3 +164,16 @@ func TestRebootVerificationResumesWithoutExecution(t *testing.T) {
 		t.Fatal("unexpected number of reports")
 	}
 }
+
+func TestOnlyExplicitlyClosedAttemptClearsJournal(t *testing.T) {
+	tpt := JobTransport{journal: JobJournal{Started: true}, log: log.New(io.Discard, "", 0),
+		save: func(JobJournal) error { return nil }}
+	for _, status := range []StatusError{http.StatusConflict, http.StatusNotFound, http.StatusServiceUnavailable} {
+		if err := tpt.handleClosedAttempt(status); err != status || !tpt.journal.Started {
+			t.Fatalf("did not retain journal on %v: %v", status, err)
+		}
+	}
+	if err := tpt.handleClosedAttempt(StatusError(http.StatusGone)); err != nil || tpt.journal != (JobJournal{}) {
+		t.Fatalf("explicit closure did not clear journal: %v", err)
+	}
+}

@@ -128,6 +128,18 @@ def create_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) -
         db.commit()
         return result
 
+    # Device operations and agent requests acquire the device lock before target/package locks.
+    devices = list(db.execute(
+        select(Device.id, Device.agent_version).join(Agent, Agent.device_id == Device.id)
+        .where(Device.id.in_(data.device_ids), Device.deleted_at.is_(None), Agent.revoked_at.is_(None))
+        .order_by(Device.id).with_for_update(of=Device)
+    ))
+    revoked = db.scalar(select(Agent.device_id).where(
+        Agent.device_id.in_(data.device_ids), Agent.revoked_at.is_not(None),
+    ).limit(1))
+    if len(devices) != len(data.device_ids) or revoked is not None:
+        raise HTTPException(422, "deployment_devices_unavailable")
+
     package = db.scalar(
         select(SoftwarePackage).join(SoftwareVersion, SoftwareVersion.package_id == SoftwarePackage.id)
         .where(SoftwareVersion.id == data.version_id).with_for_update(of=SoftwarePackage)
@@ -150,13 +162,6 @@ def create_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) -
         validate_execution(version, rule, data.operation)
         if rule.kind in GROUP_KINDS:
             minimum_agent = (0, 3, 5)
-    devices = list(db.execute(
-        select(Device.id, Device.agent_version).join(Agent, Agent.device_id == Device.id)
-        .where(Device.id.in_(data.device_ids), Device.deleted_at.is_(None), Agent.revoked_at.is_(None))
-    ))
-    if len(devices) != len(data.device_ids):
-        raise HTTPException(422, "deployment_devices_unavailable")
-
     if data.mode == "execute_v1" and not all(supports_execution(agent_version, minimum_agent) for _, agent_version in devices):
         raise HTTPException(422, "deployment_agent_incompatible")
 
@@ -233,7 +238,7 @@ def job_events(job_id: UUID, db: Db, actor: Reader, before: Annotated[int, Query
 
 @router.post("/deployments/{job_id}/cancel", tags=["Deployments"])
 def cancel_job(job_id: UUID, request: Request, db: Db, actor: Operator) -> wire.JobView:
-    if db.get(Job, job_id, with_for_update=True) is None:
+    if db.get(Job, job_id) is None:
         raise HTTPException(404, "deployment_not_found")
     targets = list(db.scalars(select(Target).where(Target.job_id == job_id).order_by(Target.id).with_for_update()))
     now = clock(db)
@@ -387,6 +392,8 @@ def submit_result(target_id: UUID, data: wire.Result, request: Request, db: Db, 
     if invalid_transport or (mode == "execute_v1" and data.outcome == "not_executed"):
         raise HTTPException(422, "deployment_mode_conflict")
     if attempt.finished_at is not None:
+        if attempt.diagnostic == "operator_resolved" and "closed_result_v1" in agent_capabilities(request):
+            raise HTTPException(410, "deployment_attempt_closed")
         stored = (attempt.exit_code, attempt.diagnostic, attempt.output_bytes, attempt.detection, attempt.process_started)
         same_result = (data.outcome == attempt.outcome and execution_details == stored
                        and bool(data.reboot_pending) == (attempt.reboot_deadline is not None))
@@ -450,6 +457,8 @@ def submit_reboot_result(target_id: UUID, data: wire.RebootResult, request: Requ
         raise HTTPException(409, "deployment_agent_incompatible")
     target, attempt = attempt_for(db, device, target_id, data.attempt_id)
     if attempt.reboot_deadline is None:
+        if attempt.diagnostic == "operator_resolved" and "closed_result_v1" in agent_capabilities(request):
+            raise HTTPException(410, "deployment_attempt_closed")
         raise HTTPException(409, "deployment_result_conflict")
     if attempt.reboot_finished_at is not None:
         if attempt.reboot_detection is not None and attempt.reboot_detection != data.detection:
@@ -459,4 +468,25 @@ def submit_reboot_result(target_id: UUID, data: wire.RebootResult, request: Requ
         finish_reboot(db, target, attempt, data.detection if now < attempt.reboot_deadline else None, now)
     else:
         raise HTTPException(409, "deployment_result_conflict")
+    expired_observation = data.detection is not None and attempt.reboot_detection is None
     db.commit()
+    if expired_observation and "closed_result_v1" in agent_capabilities(request):
+        raise HTTPException(410, "deployment_attempt_closed")
+
+
+def cancel_deleted_device_targets(db: Db, device_id: UUID) -> None:
+    """Close work that can no longer be delivered to a permanently deleted device."""
+    targets = db.scalars(select(Target).where(
+        Target.device_id == device_id, Target.state.in_(("queued", "leased", "running")),
+    ).order_by(Target.id).with_for_update())
+    now = clock(db)
+    for target in targets:
+        attempt = last_attempt(db, target.id)
+        if attempt is not None and attempt.started_at is not None:
+            target.state = "unknown"
+            attempt.finished_at, attempt.outcome, attempt.diagnostic = now, "unknown", "device_removed"
+        else:
+            target.state = "cancelled"
+            if attempt is not None and attempt.finished_at is None:
+                attempt.finished_at, attempt.outcome, attempt.diagnostic = now, "cancelled", "device_removed"
+        event(db, target.job_id, "device_removed", target, attempt)
