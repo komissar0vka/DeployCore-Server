@@ -1169,6 +1169,53 @@
         }
       }
     },
+    "/api/v1/agent-packages": {
+      "post": {
+        "tags": [
+          "Enrollment"
+        ],
+        "summary": "Create Agent Package",
+        "operationId": "create_agent_package_api_v1_agent_packages_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/deploycore__agent_package_api__PackageInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/x-msi": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeployCoreSession": []
+          }
+        ]
+      }
+    },
     "/api/v1/packages": {
       "get": {
         "tags": [
@@ -1285,7 +1332,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/PackageInput"
+                "$ref": "#/components/schemas/deploycore__package_schemas__PackageInput"
               }
             }
           }
@@ -4560,38 +4607,6 @@
         ],
         "title": "PackageDetail"
       },
-      "PackageInput": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 160,
-            "minLength": 1,
-            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
-            "title": "Name"
-          },
-          "publisher": {
-            "type": "string",
-            "maxLength": 160,
-            "minLength": 1,
-            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
-            "title": "Publisher"
-          },
-          "description": {
-            "type": "string",
-            "maxLength": 4000,
-            "pattern": "^[^\\x00]*$",
-            "title": "Description",
-            "default": ""
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "name",
-          "publisher"
-        ],
-        "title": "PackageInput"
-      },
       "PackagePage": {
         "properties": {
           "items": {
@@ -5298,6 +5313,20 @@
             "format": "password",
             "title": "Password",
             "writeOnly": true
+          },
+          "agent_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Url"
           },
           "setup_token": {
             "type": "string",
@@ -6150,6 +6179,55 @@
         ],
         "title": "VersionView"
       },
+      "deploycore__agent_package_api__PackageInput": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]*$",
+            "title": "Label"
+          },
+          "ttl_minutes": {
+            "type": "integer",
+            "maximum": 10080.0,
+            "minimum": 1.0,
+            "title": "Ttl Minutes",
+            "default": 60
+          },
+          "max_uses": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Max Uses",
+            "default": 1
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "ca": {
+            "type": "string",
+            "maxLength": 65536,
+            "title": "Ca",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "PackageInput"
+      },
       "deploycore__device_schemas__EventView": {
         "properties": {
           "id": {
@@ -6337,6 +6415,38 @@
           "attempt_id"
         ],
         "title": "Heartbeat"
+      },
+      "deploycore__package_schemas__PackageInput": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "title": "Name"
+          },
+          "publisher": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "title": "Publisher"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 4000,
+            "pattern": "^[^\\x00]*$",
+            "title": "Description",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "publisher"
+        ],
+        "title": "PackageInput"
       }
     },
     "securitySchemes": {

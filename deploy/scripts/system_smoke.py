@@ -11,6 +11,7 @@ from urllib.request import Request, build_opener, HTTPSHandler, ProxyHandler
 
 from device_smoke import exercise_devices
 from license_smoke import clear_managed_fixture_devices, exercise_license
+from agent_package_smoke import exercise_agent_package
 from package_smoke import exercise_packages
 
 base, certificate, *compose = sys.argv[1:]
@@ -71,6 +72,7 @@ assert not check("/setup", {200})[1]["configured"]
 setup = {
     **credentials("admin"), "setup_token": setup_token,
     "organization": "Test organization", "instance_name": "Stage 2",
+    "agent_url": "https://192.0.2.14:8444",
 }
 check("/setup", {403}, method="POST", data={**setup, "setup_token": "incorrect"})
 check("/setup", {403}, method="POST", data=setup, origin="https://example.invalid")
@@ -93,6 +95,7 @@ check("/users", {409}, method="POST", cookie=admin_cookie, csrf=csrf,
       data={**credentials("OPERATOR"), "role": "viewer"})
 operator_cookie, operator_csrf, user_view = login("operator")
 assert user_view["role"] == "viewer"
+assert check("/settings", {200}, cookie=admin_cookie)[1]["agent_url"].rstrip("/") == setup["agent_url"]
 settings = {
     "organization": "Updated organization", "instance_name": "DeployCore example",
     "agent_url": "https://agent.example.invalid:8443", "heartbeat_seconds": 45, "language": "en",
@@ -152,3 +155,4 @@ admin_auth = {"cookie": admin_cookie, "csrf": csrf}
 clear_managed_fixture_devices(check, admin_auth)
 exercise_license(check, login, compose, admin_auth)
 exercise_packages(check, login, sql, compose, base, context, admin_auth)
+exercise_agent_package(check, login, compose, base, context, settings["agent_url"], certificate)

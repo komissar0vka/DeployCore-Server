@@ -1,0 +1,17 @@
+**
+!apps/
+!apps/agent/
+!apps/agent/*.go
+!apps/agent/go.mod
+!apps/agent/go.sum
+!apps/agent/VERSION
+!apps/agent/setup.ps1
+!apps/agent/configured-agent.wxs
+!apps/server/
+!apps/server/requirements.txt
+!apps/server/alembic.ini
+!apps/server/deploycore/
+!apps/server/deploycore/**
+!apps/server/migrations/
+!apps/server/migrations/**
+**/__pycache__/

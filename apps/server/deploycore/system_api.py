@@ -52,6 +52,7 @@ def setup(data: schemas.SetupInput, request: Request, db: Db) -> schemas.SetupSt
     db.flush()
     installation.organization = data.organization
     installation.instance_name = data.instance_name
+    installation.agent_url = str(data.agent_url) if data.agent_url is not None else None
     installation.configured_at = datetime.now(UTC)
     audit(db, request, "user_created", actor=user, target=user, details={"role": user.role})
     audit(db, request, "setup_completed", actor=user)

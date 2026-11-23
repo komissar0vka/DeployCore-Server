@@ -149,7 +149,7 @@ function Console({ session, initialLanguage }: { session: Session; initialLangua
       onSelect={job => navigate({ ...route, job })}
       clearDevice={() => navigate({ ...route, targetDevice: undefined })} />}
     {section === 'software' && <PackageCatalog session={session} t={t} deploy={openDeployment} />}
-    {section === 'agent' && <AgentInstallPage session={session} t={t} server={settings.data?.agent_url ?? window.location.origin} />}
+    {section === 'agent' && <AgentInstallPage session={session} t={t} server={settings.data?.agent_url ?? window.location.origin} configuredAddress={!!settings.data?.agent_url} />}
     {section === 'settings' && (settings.data
       ? <SettingsPage settings={settings.data} session={session} t={t} health={<HealthCard kind="ready" t={t} />} />
       : settings.error ? <FormError message={errorMessage(settings.error, t)} /> : <LoadingSkeleton label={t('Загрузка…', 'Loading…')} />)}

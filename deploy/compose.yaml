@@ -20,7 +20,9 @@ services:
     restart: unless-stopped
 
   server:
-    build: ../apps/server
+    build:
+      context: ..
+      dockerfile: apps/server/Dockerfile
     environment:
       <<: *database-env
       POSTGRES_HOST: db

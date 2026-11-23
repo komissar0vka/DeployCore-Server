@@ -7,6 +7,7 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .body_limit import AgentBodyLimit
+from .agent_package_api import router as agent_package_router
 from .device_api import router as device_router
 from .database import create_database_engine
 from .health import router as health_router
@@ -39,6 +40,7 @@ app = FastAPI(
 app.include_router(health_router)
 app.include_router(system_router)
 app.include_router(device_router)
+app.include_router(agent_package_router)
 app.include_router(package_router)
 app.include_router(job_router)
 app.include_router(license_router)

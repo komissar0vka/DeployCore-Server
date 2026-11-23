@@ -43,8 +43,8 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T>(path: string, options: { method?: string; body?: unknown; csrf?: string; signal?: AbortSignal } = {}): Promise<T> {
-  const { method = 'GET', body, csrf, signal } = options
+export async function api<T>(path: string, options: { method?: string; body?: unknown; csrf?: string; signal?: AbortSignal; responseType?: 'blob' } = {}): Promise<T> {
+  const { method = 'GET', body, csrf, signal, responseType } = options
   const headers = new Headers()
   if (method !== 'GET') headers.set('X-DeployCore-Request', '1')
   if (csrf) headers.set('X-CSRF-Token', csrf)
@@ -63,5 +63,6 @@ export async function api<T>(path: string, options: { method?: string; body?: un
   }
   const deadline = response.headers.get('X-DeployCore-Session-Expires')
   if (deadline && response.status !== 204) window.dispatchEvent(new CustomEvent('deploycore:session-expiry', { detail: deadline }))
+  if (responseType === 'blob') return await response.blob() as T
   return response.status === 204 ? undefined as T : await response.json() as T
 }

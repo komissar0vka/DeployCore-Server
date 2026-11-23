@@ -8,6 +8,12 @@ export function SetupWizard({ status, complete, t }: { status: SetupStatus; comp
   const [step, setStep] = useState(0)
   const [organization, setOrganization] = useState('')
   const [instanceName, setInstanceName] = useState('DeployCore')
+  const [agentAddress, setAgentAddress] = useState(window.location.protocol === 'https:' ? window.location.origin : '')
+  function agentOrigin() {
+    const address = agentAddress.trim()
+    if (/^[A-Za-z0-9.-]+$/.test(address) && window.location.port) return `https://${address}:${window.location.port}`
+    return address.includes('://') ? address : `https://${address}`
+  }
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [confirmation, setConfirmation] = useState('')
@@ -32,6 +38,15 @@ export function SetupWizard({ status, complete, t }: { status: SetupStatus; comp
       }
       return
     }
+    if (step === 1) {
+      try {
+        const url = new URL(agentOrigin())
+        if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error()
+      } catch {
+        setProblem(t('Укажите HTTPS-адрес сервера без пути и параметров.', 'Enter an HTTPS server address without a path or query.'))
+        return
+      }
+    }
     if (step === 2 && password !== confirmation) {
       setProblem(t('Пароли не совпадают.', 'Passwords do not match.'))
       return
@@ -43,7 +58,7 @@ export function SetupWizard({ status, complete, t }: { status: SetupStatus; comp
     setBusy(true)
     try {
       const result = await api<SetupStatus>('/setup', {
-        method: 'POST', body: { organization, instance_name: instanceName, username, password, setup_token: secret },
+        method: 'POST', body: { organization, instance_name: instanceName, agent_url: agentOrigin(), username, password, setup_token: secret },
       })
       complete(result)
     } catch (error) {
@@ -73,6 +88,10 @@ export function SetupWizard({ status, complete, t }: { status: SetupStatus; comp
         </>}
         {step === 1 && <>
           <Field label={t('Название организации', 'Organization name')} required maxLength={120} value={organization} onChange={e => setOrganization(e.target.value)} />
+          <Field label={t('IP или DNS-имя сервера для агентов', 'Server IP or DNS name for agents')} required maxLength={512}
+            value={agentAddress} onChange={e => setAgentAddress(e.target.value)}
+            hint={t('Укажите адрес, доступный с компьютеров Windows, например https://192.168.1.10:8444. Сертификат должен содержать этот IP или DNS-имя.',
+              'Enter the address Windows computers can reach, for example https://192.168.1.10:8444. The certificate must cover this IP or DNS name.')} />
           <Field label={t('Имя экземпляра', 'Instance name')} required maxLength={120} value={instanceName} onChange={e => setInstanceName(e.target.value)} />
         </>}
         {step === 2 && <>
@@ -84,6 +103,7 @@ export function SetupWizard({ status, complete, t }: { status: SetupStatus; comp
         {step === 3 && <dl className="grid gap-3 break-words">
           <div><dt className="text-sm text-muted-foreground">{t('Организация', 'Organization')}</dt><dd>{organization}</dd></div>
           <div><dt className="text-sm text-muted-foreground">{t('Имя экземпляра', 'Instance name')}</dt><dd>{instanceName}</dd></div>
+          <div><dt className="text-sm text-muted-foreground">{t('Адрес для агентов', 'Agent address')}</dt><dd>{agentOrigin()}</dd></div>
           <div><dt className="text-sm text-muted-foreground">Super Admin</dt><dd>{username}</dd></div>
         </dl>}
         <FormError message={problem} />

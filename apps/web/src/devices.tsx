@@ -496,7 +496,7 @@ function CopyCommand({ title, value, t }: { title: string; value: string; t: Tra
   </div>
 }
 
-export function AgentInstallPage({ session, t, server }: Props & { server: string }) {
+export function AgentInstallPage({ session, t, server, configuredAddress }: Props & { server: string; configuredAddress: boolean }) {
   const client = useQueryClient()
   const [secret, setSecret] = useState<string | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
@@ -524,12 +524,30 @@ export function AgentInstallPage({ session, t, server }: Props & { server: strin
     setBusy(true)
     setProblem(null)
     try {
-      const issued = await api<{ token: string }>('/enrollment-tokens', {
-        method: 'POST', csrf: session.csrf_token, body: {
-          label: fields.get('label'), ttl_minutes: Number(fields.get('ttl_minutes')), max_uses: Number(fields.get('max_uses')),
-        },
-      })
-      setSecret(issued.token)
+      const body = { label: fields.get('label'), ttl_minutes: Number(fields.get('ttl_minutes')), max_uses: Number(fields.get('max_uses')) }
+      const button = (event.nativeEvent as SubmitEvent).submitter
+      if (button instanceof HTMLButtonElement && button.value === 'msi') {
+        const ca = fields.get('ca')
+        if (ca instanceof File && ca.size > 65536) {
+          setProblem(t('PEM-файл превышает 64 КиБ.', 'The PEM file exceeds 64 KiB.'))
+          return
+        }
+        const packageFile = await api<Blob>('/agent-packages', {
+          method: 'POST', csrf: session.csrf_token, responseType: 'blob',
+          body: { ...body, ca: ca instanceof File ? await ca.text() : '' },
+        })
+        const url = URL.createObjectURL(packageFile)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = 'deploycore-managed-agent.msi'
+        document.body.append(link)
+        link.click()
+        link.remove()
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      } else {
+        const issued = await api<{ token: string }>('/enrollment-tokens', { method: 'POST', csrf: session.csrf_token, body })
+        setSecret(issued.token)
+      }
       setOffset(0)
       void client.invalidateQueries({ queryKey: ['tokens'] })
     } catch (error) {
@@ -545,7 +563,7 @@ export function AgentInstallPage({ session, t, server }: Props & { server: strin
       <SectionTitle title={t('Установщик Windows x64', 'Windows x64 installer')} />
       <p className="mb-2 break-all text-sm">{t('Адрес сервера', 'Server address')} <code className="ml-2 text-primary">{origin}</code></p>
       <div className="my-3 flex flex-wrap items-center gap-3 text-sm text-primary">
-        <a className="inline-flex items-center gap-2 rounded-xl bg-accent px-3 py-2 font-semibold text-primary-foreground hover:bg-primary-hover" href="/assets/agent/deploycore-agent.msi" download><ArrowDownToLine className="size-4" aria-hidden />{t('Скачать MSI', 'Download MSI')}</a>
+        <a className="inline-flex items-center gap-2 rounded-xl bg-accent px-3 py-2 font-semibold text-primary-foreground hover:bg-primary-hover" href="/assets/agent/deploycore-agent.msi" download><ArrowDownToLine className="size-4" aria-hidden />{t('MSI с ручной настройкой', 'MSI with manual setup')}</a>
         <a href="/assets/agent/deploycore-agent.exe" download>{t('Скачать Windows Agent', 'Download Windows Agent')}</a>
         <a href="/assets/agent/SHA256SUMS" download>SHA256SUMS</a>
         <a href="/assets/agent/build.json" download>{t('Сведения о сборке', 'Build information')}</a>
@@ -564,15 +582,23 @@ export function AgentInstallPage({ session, t, server }: Props & { server: strin
       </div>}
     </Panel>
     <div className="grid min-w-0 gap-4"><Panel>
-      <SectionTitle title={t('Токен регистрации', 'Enrollment token')} />
+      <SectionTitle title={t('Готовый MSI и токены', 'Configured MSI and tokens')} />
+      <p className="mb-3 text-sm">{t('Готовый MSI устанавливает службу с сохранённым адресом и временным токеном. Передавайте файл только тем, кому разрешена регистрация компьютера.',
+        'The configured MSI installs the service with the saved address and a temporary token. Share it only with people authorized to enroll a computer.')}</p>
+      {!configuredAddress && <p className="mb-3 text-sm">{t('Сначала задайте адрес для агентов в настройках экземпляра.', 'Set the agent address in instance settings first.')}</p>}
       <form className="grid gap-3" onSubmit={submit}>
         <fieldset className="grid gap-3 sm:grid-cols-2" disabled={busy || !!secret}>
           <Field name="label" label={t('Название', 'Name')} required maxLength={120} />
           <Field name="ttl_minutes" label={t('Срок, мин', 'Lifetime, min')} required type="number" min={1} max={10080} defaultValue={60} />
           <Field name="max_uses" label={t('Лимит регистраций', 'Registration limit')} required type="number" min={1} max={100} defaultValue={1} />
+          <Field name="ca" type="file" accept=".pem,.crt" label={t('Доверенный CA для MSI', 'Trusted CA for MSI')}
+            hint={t('Необязательно, если Windows уже доверяет сертификату сервера.', 'Optional if Windows already trusts the server certificate.')} />
         </fieldset>
         <FormError message={problem} />
-        <Action type="submit" disabled={busy || !!secret}>{t('Создать токен', 'Create token')}</Action>
+        <div className="flex flex-wrap gap-2">
+          <Action type="submit" value="msi" disabled={busy || !!secret || !configuredAddress}>{t('Скачать готовый MSI', 'Download configured MSI')}</Action>
+          <Action type="submit" secondary disabled={busy || !!secret}>{t('Создать токен', 'Create token')}</Action>
+        </div>
       </form>
       {secret && <div className="mt-4"><SecretBox value={secret} t={t} close={() => setSecret(null)} /></div>}
     </Panel>

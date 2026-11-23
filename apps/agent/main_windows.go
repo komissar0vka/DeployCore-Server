@@ -27,9 +27,9 @@ func (w eventWriter) Write(data []byte) (int, error) {
 	return len(data), w.target.Info(1, strings.TrimSpace(string(data)))
 }
 
-type serviceHandler struct{}
+type serviceHandler struct{ managedMSI bool }
 
-func (serviceHandler) Execute(_ []string, changes <-chan svc.ChangeRequest, statuses chan<- svc.Status) (bool, uint32) {
+func (handler serviceHandler) Execute(_ []string, changes <-chan svc.ChangeRequest, statuses chan<- svc.Status) (bool, uint32) {
 	statuses <- svc.Status{State: svc.StartPending, WaitHint: 5000}
 	eventTarget, err := eventlog.Open(serviceName)
 	if err != nil {
@@ -42,7 +42,11 @@ func (serviceHandler) Execute(_ []string, changes <-chan svc.ChangeRequest, stat
 		logger.Print(err)
 		return true, 2
 	}
-	state, err := loadState(directory)
+	load := loadState
+	if handler.managedMSI {
+		load = loadMSIState
+	}
+	state, err := load(directory)
 	if err != nil {
 		logger.Printf("Load agent state: %v", err)
 		return true, 2
@@ -128,6 +132,10 @@ func newEnrollment(server string, certificate []byte, deviceID string) (State, e
 	if err != nil {
 		return State{}, err
 	}
+	return enrollmentState(server, certificate, deviceID, token)
+}
+
+func enrollmentState(server string, certificate []byte, deviceID, token string) (State, error) {
 	credential, err := randomCredential()
 	if err != nil {
 		return State{}, err
@@ -377,8 +385,8 @@ func command(args []string) error {
 	case "version":
 		fmt.Println(version)
 		return nil
-	case "service":
-		return svc.Run(serviceName, serviceHandler{})
+	case "service", "service-msi":
+		return svc.Run(serviceName, serviceHandler{managedMSI: args[0] == "service-msi"})
 	case "install":
 		return install(args[1:])
 	case "recover":

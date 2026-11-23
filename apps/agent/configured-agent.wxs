@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="DeployCore Managed Agent" Language="1033" Version="$(var.Version)"
+           Manufacturer="DeployCore" UpgradeCode="AACB9A3E-8675-4FEB-9063-E53D0ACA5122">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine"/>
+    <MediaTemplate EmbedCab="yes"/>
+    <Property Id="EXISTINGDEPLOYCORESERVICE">
+      <RegistrySearch Id="ExistingService" Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\DeployCoreAgent"
+                      Name="ImagePath" Type="raw" Win64="yes"/>
+    </Property>
+    <Condition Message="DeployCore Agent is already installed. Retain the existing installation or remove it before installing this package.">Installed OR NOT EXISTINGDEPLOYCORESERVICE</Condition>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="ManagedAgentDirectory" Name="DeployCore Managed Agent">
+          <Component Id="ManagedAgent" Guid="E49D149E-6599-4B17-83DF-8BA39BA06545" Win64="yes">
+            <File Id="ManagedAgentExe" Name="deploycore-agent.exe" Source="deploycore-agent.exe" KeyPath="yes"/>
+            <File Id="Enrollment" Name="enrollment.json" Source="enrollment.json"/>
+            <ServiceInstall Id="InstallAgentService" Name="DeployCoreAgent" DisplayName="DeployCore Agent"
+                            Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem"
+                            Arguments="service-msi" Vital="yes"/>
+            <ServiceControl Id="ControlAgentService" Name="DeployCoreAgent" Start="install" Stop="both" Remove="uninstall" Wait="yes"/>
+            <RegistryValue Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\DeployCoreAgent"
+                           Name="EventMessageFile" Type="expandable" Value="%SystemRoot%\System32\EventCreate.exe"/>
+            <RegistryValue Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\DeployCoreAgent"
+                           Name="TypesSupported" Type="integer" Value="7"/>
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+    <Feature Id="AgentFeature" Title="DeployCore Agent" Level="1">
+      <ComponentRef Id="ManagedAgent"/>
+    </Feature>
+  </Product>
+</Wix>
