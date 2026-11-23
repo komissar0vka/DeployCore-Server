@@ -1,0 +1,344 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "DeployCore Cloud Activation",
+    "version": "1.0.0-draft",
+    "description": "Contract for the future activation service."
+  },
+  "paths": {
+    "/v1/activation/challenge": {
+      "post": {
+        "operationId": "createChallenge",
+        "security": [
+          {
+            "ActivationAuthorization": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChallengeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Challenge"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Activation credential missing or invalid"
+          },
+          "403": {
+            "description": "Activation or proof rejected"
+          },
+          "409": {
+            "description": "Challenge consumed or request identity conflict"
+          },
+          "422": {
+            "description": "Invalid protocol payload"
+          },
+          "429": {
+            "description": "Activation rate limit reached"
+          }
+        }
+      }
+    },
+    "/v1/activation/complete": {
+      "post": {
+        "operationId": "completeActivation",
+        "security": [
+          {
+            "ActivationAuthorization": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedGrant"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Activation credential missing or invalid"
+          },
+          "403": {
+            "description": "Activation or proof rejected"
+          },
+          "409": {
+            "description": "Challenge consumed or request identity conflict"
+          },
+          "422": {
+            "description": "Invalid protocol payload"
+          },
+          "429": {
+            "description": "Activation rate limit reached"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ActivationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "protocol": {
+            "const": 1,
+            "title": "Protocol",
+            "type": "integer"
+          },
+          "instance_id": {
+            "format": "uuid",
+            "title": "Instance Id",
+            "type": "string"
+          },
+          "instance_public_key": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Instance Public Key",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "challenge_id": {
+            "format": "uuid",
+            "title": "Challenge Id",
+            "type": "string"
+          },
+          "proof": {
+            "pattern": "^[A-Za-z0-9_-]{86}$",
+            "title": "Proof",
+            "type": "string"
+          }
+        },
+        "required": [
+          "protocol",
+          "instance_id",
+          "instance_public_key",
+          "request_id",
+          "challenge_id",
+          "proof"
+        ],
+        "title": "ActivationRequest",
+        "type": "object"
+      },
+      "Challenge": {
+        "additionalProperties": false,
+        "properties": {
+          "challenge_id": {
+            "format": "uuid",
+            "title": "Challenge Id",
+            "type": "string"
+          },
+          "nonce": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Nonce",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "challenge_id",
+          "nonce",
+          "expires_at"
+        ],
+        "title": "Challenge",
+        "type": "object"
+      },
+      "ChallengeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "protocol": {
+            "const": 1,
+            "title": "Protocol",
+            "type": "integer"
+          },
+          "instance_id": {
+            "format": "uuid",
+            "title": "Instance Id",
+            "type": "string"
+          },
+          "instance_public_key": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Instance Public Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "protocol",
+          "instance_id",
+          "instance_public_key"
+        ],
+        "title": "ChallengeRequest",
+        "type": "object"
+      },
+      "GrantPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "license_id": {
+            "format": "uuid",
+            "title": "License Id",
+            "type": "string"
+          },
+          "activation_id": {
+            "format": "uuid",
+            "title": "Activation Id",
+            "type": "string"
+          },
+          "instance_id": {
+            "format": "uuid",
+            "title": "Instance Id",
+            "type": "string"
+          },
+          "instance_key_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Instance Key Sha256",
+            "type": "string"
+          },
+          "edition": {
+            "enum": [
+              "business",
+              "enterprise"
+            ],
+            "title": "Edition",
+            "type": "string"
+          },
+          "device_limit": {
+            "maximum": 1000000,
+            "minimum": 1,
+            "title": "Device Limit",
+            "type": "integer"
+          },
+          "features": {
+            "items": {
+              "enum": [
+                "inventory",
+                "catalog",
+                "deployments"
+              ],
+              "type": "string"
+            },
+            "maxItems": 3,
+            "title": "Features",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "issue_number": {
+            "maximum": 9223372036854775807,
+            "minimum": 1,
+            "title": "Issue Number",
+            "type": "integer"
+          },
+          "issued_at": {
+            "format": "date-time",
+            "title": "Issued At",
+            "type": "string"
+          },
+          "not_before": {
+            "format": "date-time",
+            "title": "Not Before",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "grace_until": {
+            "format": "date-time",
+            "title": "Grace Until",
+            "type": "string"
+          }
+        },
+        "required": [
+          "license_id",
+          "activation_id",
+          "instance_id",
+          "instance_key_sha256",
+          "edition",
+          "device_limit",
+          "features",
+          "issue_number",
+          "issued_at",
+          "not_before",
+          "expires_at",
+          "grace_until"
+        ],
+        "title": "GrantPayload",
+        "type": "object"
+      },
+      "SignedGrant": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "kid": {
+            "pattern": "^[A-Za-z0-9_-]{1,40}$",
+            "title": "Kid",
+            "type": "string"
+          },
+          "payload": {
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Payload",
+            "type": "string"
+          },
+          "signature": {
+            "pattern": "^[A-Za-z0-9_-]{86}$",
+            "title": "Signature",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "kid",
+          "payload",
+          "signature"
+        ],
+        "title": "SignedGrant",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "ActivationAuthorization": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Activation credential bound to a Cloud entitlement."
+      }
+    }
+  }
+}
