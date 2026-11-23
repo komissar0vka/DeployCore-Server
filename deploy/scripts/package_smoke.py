@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, build_opener, HTTPSHandler, ProxyHandler
 
 from deployment_smoke import exercise_deployments
+from execution_smoke import exercise_execution
 
 
 def exercise_packages(check, login, sql, compose, base, context, admin):
@@ -23,7 +24,7 @@ def exercise_packages(check, login, sql, compose, base, context, admin):
             "version": version, "architecture": architecture, "installer": installer,
             "detection": {"kind": "registry_software", "display_name": "Catalog test", "version": version},
             "install_args": ["/quiet"] if installer == "exe" else ["/qn"],
-            "uninstall_args": [] if version == "2.0" else None, "success_codes": [0, 3010], "min_windows_build": 19045,
+            "uninstall_args": ["/remove"] if version == "2.0" else None, "success_codes": [0, 3010], "min_windows_build": 19045,
             "timeout_seconds": 300, "reboot_required": True,
         })[1]
 
@@ -146,6 +147,7 @@ def exercise_packages(check, login, sql, compose, base, context, admin):
     downloaded, _ = request("/api/v1" + artifact_url, headers={"Cookie": operator_cookie})
     assert hashlib.sha256(downloaded).hexdigest() == record["sha256"]
     exercise_deployments(check, login, sql, compose, signed["id"], admin)
+    exercise_execution(check, login, sql, base, context, signed["id"], admin)
     check(path, {403}, method="DELETE", **viewer)
     check(path, {204}, method="DELETE", **operator)
     check(path, {404}, **viewer)

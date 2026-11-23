@@ -7,28 +7,38 @@ import { ActivityFeed, ConfirmDialog, EmptyState, LoadingSkeleton, SectionTitle,
 import { Action, Field, FormError, Panel, errorMessage, type Translate } from './ui'
 
 type Operation = 'install' | 'uninstall'
-type TargetState = 'queued' | 'leased' | 'running' | 'not_executed' | 'cancelled' | 'failed'
+type TargetState = 'queued' | 'leased' | 'running' | 'not_executed' | 'cancelled' | 'failed' | 'succeeded' | 'already_installed' | 'already_absent' | 'reboot_required' | 'unknown'
 interface Job {
-  id: string; package_name: string; version: string; operation: Operation; created_at: string
+  id: string; package_name: string; version: string; operation: Operation; mode: 'transport_only' | 'execute_v1'; created_at: string
   counts: Partial<Record<TargetState, number>>
 }
 interface Target {
   id: string; hostname: string; state: TargetState; cancel_requested: boolean
   attempt: number | null; lease_expires_at: string | null; recovery_required: boolean
+  stage?: string; exit_code?: number | null; diagnostic?: string; output_bytes?: number | null
 }
 interface Entry { id: number; target_id: string | null; action: string; created_at: string }
-interface Device { id: string; hostname: string; online: boolean; agent_revoked: boolean }
+interface Device { id: string; hostname: string; online: boolean; agent_revoked: boolean; agent_version: string }
 interface Product { id: string; name: string }
-interface Version { id: string; version: string; architecture: string; approved_at: string | null; uninstall_args: string[] | null }
+interface Version { id: string; version: string; architecture: string; approved_at: string | null; install_args: string[]; uninstall_args: string[] | null; installer: string; detection: { kind: string }; timeout_seconds: number }
 interface Props { session: Session; t: Translate }
-interface Input { version_id: string; operation: Operation; device_ids: string[]; request_id: string }
+export interface DeploymentPreset { packageId?: string; versionId?: string; productName?: string; deviceId?: string; deviceName?: string }
+interface Input { mode: 'transport_only' | 'execute_v1'; version_id: string; operation: Operation; device_ids: string[]; request_id: string }
 const pageSize = 25
+
+function compatible(version: string) {
+  if (!/^\d{1,4}\.\d{1,4}\.\d{1,4}$/.test(version)) return false
+  const [major, minor, patch] = version.split('.').map(Number)
+  return major > 0 || minor > 3 || (minor === 3 && patch >= 4)
+}
 
 function stateLabel(state: TargetState, t: Translate) {
   return {
     queued: t('В очереди', 'Queued'), leased: t('Выдано', 'Leased'), running: t('Подтверждено', 'Acknowledged'),
     cancelled: t('Отменено', 'Cancelled'), not_executed: t('Без запуска', 'Not executed'),
-    failed: t('Сбой доставки', 'Delivery failed'),
+    failed: t('Ошибка', 'Failed'), succeeded: t('Успешно', 'Succeeded'),
+    already_installed: t('Уже установлено', 'Already installed'), already_absent: t('Уже отсутствует', 'Already absent'),
+    reboot_required: t('Требуется перезагрузка', 'Restart required'), unknown: t('Исход неизвестен', 'Unknown outcome'),
   }[state]
 }
 
@@ -38,7 +48,7 @@ function operationLabel(operation: Operation, t: Translate) {
 
 function JobProgress({ job, t }: { job: Job; t: Translate }) {
   const total = Object.values(job.counts).reduce((sum, count) => sum + count, 0)
-  const complete = (job.counts.not_executed ?? 0) + (job.counts.cancelled ?? 0) + (job.counts.failed ?? 0)
+  const complete = total - (job.counts.queued ?? 0) - (job.counts.leased ?? 0) - (job.counts.running ?? 0) - (job.counts.unknown ?? 0)
   return <div className="grid gap-1.5 text-xs text-muted-foreground">
     <span>{t('Завершено целей', 'Targets finished')}: {complete}/{total}</span>
     <progress className="h-1.5 w-full max-w-xs accent-primary" value={complete} max={Math.max(1, total)}
@@ -48,14 +58,16 @@ function JobProgress({ job, t }: { job: Job; t: Translate }) {
   </div>
 }
 
-function NewJob({ session, t, close, created }: Props & { close: () => void; created: (id: string) => void }) {
+function NewJob({ session, t, close, created, preset }: Props & { close: () => void; created: (id: string) => void; preset?: DeploymentPreset }) {
   const [packageTerm, setPackageTerm] = useState('')
-  const [packageId, setPackageId] = useState('')
-  const [versionId, setVersionId] = useState('')
+  const [packageId, setPackageId] = useState(preset?.packageId ?? '')
+  const [versionId, setVersionId] = useState(preset?.versionId ?? '')
   const [operation, setOperation] = useState<Operation>('install')
+  const [mode, setMode] = useState<Input['mode']>('execute_v1')
+  const [confirm, setConfirm] = useState(false)
   const [term, setTerm] = useState('')
   const [offset, setOffset] = useState(0)
-  const [selected, setSelected] = useState(new Map<string, string>())
+  const [selected, setSelected] = useState(() => new Map<string, string>(preset?.deviceId ? [[preset.deviceId, preset.deviceName ?? preset.deviceId]] : []))
   const submission = useRef<{ fingerprint: string; requestId: string } | null>(null)
 
   const products = useQuery({
@@ -71,7 +83,8 @@ function NewJob({ session, t, close, created }: Props & { close: () => void; cre
     queryFn: () => api<{ items: Device[]; total: number }>(`/devices?${new URLSearchParams({ q: term, offset: String(offset), limit: String(pageSize) })}`),
   })
   const eligible = (versions.data?.versions ?? []).filter(version => version.approved_at && (operation === 'install' || version.uninstall_args !== null))
-  const canSubmit = eligible.some(version => version.id === versionId) && selected.size > 0
+  const chosen = eligible.find(version => version.id === versionId)
+  const canSubmit = !!chosen && selected.size > 0 && (mode !== 'execute_v1' || operation !== 'uninstall' || session.user.role === 'super_admin')
   const mutation = useMutation({
     mutationFn: (body: Input) => api<Job>('/deployments', { method: 'POST', body, csrf: session.csrf_token }),
     onSuccess: job => created(job.id),
@@ -80,7 +93,12 @@ function NewJob({ session, t, close, created }: Props & { close: () => void; cre
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!canSubmit || mutation.isPending) return
-    const payload = { version_id: versionId, operation, device_ids: [...selected.keys()].sort() }
+    if (mode === 'execute_v1') setConfirm(true)
+    else submitJob()
+  }
+
+  function submitJob() {
+    const payload = { mode, version_id: versionId, operation, device_ids: [...selected.keys()].sort() }
     const fingerprint = JSON.stringify(payload)
     if (submission.current?.fingerprint !== fingerprint) {
       submission.current = { fingerprint, requestId: crypto.randomUUID() }
@@ -97,15 +115,31 @@ function NewJob({ session, t, close, created }: Props & { close: () => void; cre
     })
   }
 
-  return <Dialog title={t('Новое задание', 'New job')} closeLabel={t('Закрыть', 'Close')} close={close}>
-    <form className="grid gap-3" onSubmit={submit}>
-      <p className="text-sm text-muted-foreground">{t('Режим проверки протокола. Установщик не запускается.', 'Transport validation mode. No installer is run.')}</p>
+  return <Dialog title={confirm ? t('Подтвердите запуск', 'Confirm execution') : t('Новое задание', 'New job')} closeLabel={t('Закрыть', 'Close')} close={close}>
+    {confirm ? <div className="grid gap-3 text-sm">
+      <p>{operationLabel(operation, t)} · {chosen?.version} · {chosen?.architecture}</p>
+      <p className="break-words">{[...selected.values()].join(', ')}</p>
+      <code className="break-all">{JSON.stringify(operation === 'install' ? chosen?.install_args : chosen?.uninstall_args)}</code>
+      <FormError message={mutation.error && errorMessage(mutation.error, t)} />
+      <div className="flex flex-wrap gap-2">
+        <Action secondary disabled={mutation.isPending} onClick={() => setConfirm(false)}>{t('Назад', 'Back')}</Action>
+        <Action disabled={mutation.isPending} onClick={submitJob}>{t('Подтвердить запуск', 'Confirm execution')}</Action>
+      </div>
+    </div> : <form className="grid gap-3" onSubmit={submit}>
+      <label className="grid gap-2 text-sm">{t('Режим', 'Mode')}
+        <select className="input" aria-label={t('Режим', 'Mode')} value={mode} onChange={event => {
+          setMode(event.target.value as Input['mode']); setOperation('install'); setSelected(new Map())
+        }}>
+          <option value="execute_v1">{t('Выполнение на Windows', 'Execute on Windows')}</option>
+          <option value="transport_only">{t('Проверка транспорта', 'Transport test')}</option>
+        </select>
+      </label>
       <label className="grid gap-2 text-sm">{t('Операция', 'Operation')}
         <select aria-label={t('Операция', 'Operation')} className="input" value={operation} onChange={event => {
           setOperation(event.target.value as Operation); setVersionId('')
         }}>
           <option value="install">{operationLabel('install', t)}</option>
-          <option value="uninstall">{operationLabel('uninstall', t)}</option>
+          <option value="uninstall" disabled={mode === 'execute_v1' && session.user.role !== 'super_admin'}>{operationLabel('uninstall', t)}</option>
         </select>
       </label>
       <Field label={t('Поиск программы', 'Search programs')} maxLength={160} value={packageTerm} onChange={event => {
@@ -116,6 +150,8 @@ function NewJob({ session, t, close, created }: Props & { close: () => void; cre
           setPackageId(event.target.value); setVersionId('')
         }}>
           <option value="">{t('Выберите программу', 'Select a program')}</option>
+          {packageId && !products.data?.items.some(product => product.id === packageId) &&
+            <option value={packageId}>{preset?.productName ?? packageId}</option>}
           {products.data?.items.map(product => <option key={product.id} value={product.id}>{product.name}</option>)}
         </select>
       </label>
@@ -135,7 +171,7 @@ function NewJob({ session, t, close, created }: Props & { close: () => void; cre
       <ul className="max-h-36 overflow-y-auto rounded-lg border border-border p-2 text-sm">
         {computers.data?.items.map(device => <li key={device.id}>
           <label className="flex items-center gap-2 py-1">
-            <input type="checkbox" checked={selected.has(device.id)} disabled={device.agent_revoked || (selected.size === 100 && !selected.has(device.id))}
+            <input type="checkbox" checked={selected.has(device.id)} disabled={device.agent_revoked || (mode === 'execute_v1' && !compatible(device.agent_version) && !selected.has(device.id)) || (selected.size === 100 && !selected.has(device.id))}
               onChange={() => toggle(device)} />
             <span className="min-w-0 grow break-all">{device.hostname}</span>
             <span className="text-xs text-muted-foreground">{device.agent_revoked ? t('Отозван', 'Revoked') : device.online ? t('Онлайн', 'Online') : t('Офлайн', 'Offline')}</span>
@@ -154,7 +190,7 @@ function NewJob({ session, t, close, created }: Props & { close: () => void; cre
       <FormError message={(products.error || versions.error || computers.error || mutation.error) &&
         errorMessage(products.error || versions.error || computers.error || mutation.error, t)} />
       <Action type="submit" disabled={!canSubmit || mutation.isPending}>{t('Создать задание', 'Create job')}</Action>
-    </form>
+    </form>}
   </Dialog>
 }
 
@@ -177,8 +213,26 @@ function JobDetails({ session, t, id, back }: Props & { id: string; back: () => 
     },
   })
   const job = query.data
+  const [targetAction, setTargetAction] = useState<{ id: string; type: 'retry' | 'resolve'; key: string }>()
+  const mutateTarget = useMutation({
+    mutationFn: (action: NonNullable<typeof targetAction>) => api<Job>(`${path}/targets/${action.id}/${action.type}`, {
+      method: 'POST', csrf: session.csrf_token,
+      body: action.type === 'resolve' ? { verified_stopped: true } : { request_id: action.key },
+    }),
+    onSuccess: () => {
+      setTargetAction(undefined)
+      void client.invalidateQueries({ queryKey: ['deployments'] })
+      void client.invalidateQueries({ queryKey: ['deployment-events', id] })
+    },
+  })
   const names = new Map(job?.targets.map(target => [target.id, target.hostname]))
+  const stages: Record<string, string> = {
+    checking: t('Проверка наличия', 'Checking presence'), downloading: t('Скачивание', 'Downloading'),
+    executing: t('Выполнение', 'Executing'), verifying: t('Проверка результата', 'Verifying'),
+    operator_resolved: t('Разрешено оператором', 'Resolved by operator'),
+  }
   const eventsLabels: Record<string, string> = {
+    ...stages,
     created: t('Задание создано', 'Job created'), leased: t('Попытка выдана', 'Attempt leased'),
     acknowledged: t('Получение подтверждено', 'Delivery acknowledged'), lease_expired: t('Срок выдачи истёк', 'Lease expired'),
     recovered: t('Связь восстановлена', 'Lease recovered'), delivery_failed: t('Исчерпаны попытки выдачи', 'Delivery attempts exhausted'),
@@ -196,6 +250,7 @@ function JobDetails({ session, t, id, back }: Props & { id: string; back: () => 
           ? <Action secondary disabled={cancel.isPending} onClick={() => setConfirm(true)}>{t('Отменить задание', 'Cancel job')}</Action> : undefined
       } />
       <JobProgress job={job} t={t} />
+      <FormError message={mutateTarget.error && errorMessage(mutateTarget.error, t)} />
       <ul className="mt-4 divide-y divide-border">{job.targets.map(target => <li key={target.id} className="flex flex-wrap items-center justify-between gap-2 py-2.5 text-sm">
         <span className="break-all font-medium">{target.hostname}</span>
         <div className="flex flex-wrap items-center gap-2">
@@ -203,6 +258,14 @@ function JobDetails({ session, t, id, back }: Props & { id: string; back: () => 
           {target.recovery_required && <StatusBadge tone="warning">{t('Ожидается восстановление', 'Recovery required')}</StatusBadge>}
           {target.state === 'running' && target.cancel_requested && <StatusBadge tone="warning">{t('Запрошена отмена', 'Cancellation requested')}</StatusBadge>}
           <StatusBadge tone={target.state === 'failed' ? 'danger' : 'neutral'}>{stateLabel(target.state, t)}</StatusBadge>
+          {target.stage && <span>{stages[target.stage] ?? target.stage}</span>}
+          {target.exit_code != null && <code>{t('Код', 'Exit')}: {target.exit_code}</code>}
+          {target.diagnostic && <code className="break-all">{target.diagnostic}</code>}
+          {target.output_bytes != null && <span>{t('Вывод, байт', 'Output bytes')}: {target.output_bytes}</span>}
+          {target.recovery_required && session.user.role === 'super_admin' &&
+            <Action secondary onClick={() => setTargetAction({ id: target.id, type: 'resolve', key: crypto.randomUUID() })}>{t('Разрешить вручную', 'Resolve manually')}</Action>}
+          {target.state === 'failed' && session.user.role !== 'viewer' &&
+            <Action secondary onClick={() => setTargetAction({ id: target.id, type: 'retry', key: crypto.randomUUID() })}>{t('Повторить', 'Retry')}</Action>}
         </div>
       </li>)}</ul>
     </Panel>}
@@ -220,6 +283,13 @@ function JobDetails({ session, t, id, back }: Props & { id: string; back: () => 
         {events.data?.length === 50 && <Action secondary onClick={() => setBefore(events.data?.at(-1)?.id)}>{t('Более ранние события', 'Earlier events')}</Action>}
       </div>
     </Panel>
+    {targetAction && <ConfirmDialog
+      title={targetAction.type === 'resolve' ? t('Разрешить неопределённый исход?', 'Resolve unknown outcome?') : t('Создать повторное задание?', 'Create a retry job?')}
+      description={targetAction.type === 'resolve'
+        ? t('Подтвердите, что установщик и его дочерние операции завершились на ПК. Это разблокирует выдачу.', 'Confirm the installer and related operations have stopped on the computer. This unblocks its queue.')
+        : t('Будет создано отдельное задание для этого устройства.', 'A new job will be created for this device.')}
+      labels={{ close: t('Закрыть', 'Close'), cancel: t('Назад', 'Back'), confirm: t('Подтвердить', 'Confirm') }}
+      close={() => setTargetAction(undefined)} confirm={() => { if (!mutateTarget.isPending) mutateTarget.mutate(targetAction) }} />}
     {confirm && <ConfirmDialog title={t('Отменить задание?', 'Cancel job?')}
       description={t('Ожидающие выдачи отменятся. Подтверждённые попытки получат запрос отмены и завершатся после ответа агента.', 'Pending deliveries cancel immediately. Acknowledged attempts receive a cancellation request and wait for the agent.') }
       labels={{ close: t('Закрыть', 'Close'), cancel: t('Назад', 'Back'), confirm: t('Отменить задание', 'Cancel job') }}
@@ -227,9 +297,9 @@ function JobDetails({ session, t, id, back }: Props & { id: string; back: () => 
   </div>
 }
 
-export function DeploymentsPage({ session, t }: Props) {
+export function DeploymentsPage({ session, t, preset, clearPreset }: Props & { preset?: DeploymentPreset; clearPreset: () => void }) {
   const [selected, setSelected] = useState<string>()
-  const [creating, setCreating] = useState(false)
+  const [creating, setCreating] = useState(Boolean(preset))
   const [offset, setOffset] = useState(0)
   const client = useQueryClient()
   const list = useQuery({
@@ -239,7 +309,7 @@ export function DeploymentsPage({ session, t }: Props) {
   if (selected) return <JobDetails session={session} t={t} id={selected} back={() => setSelected(undefined)} />
   return <Panel>
     <SectionTitle title={t('Очередь развёртывания', 'Deployment queue')}
-      description={t('Проверка доставки и результатов без запуска установщиков.', 'Delivery and results validation without running installers.')}
+      description={t('Задания установки, обновления и удаления.', 'Install, upgrade and removal jobs.')}
       actions={session.user.role !== 'viewer' && <Action onClick={() => setCreating(true)}><Plus className="size-4" aria-hidden />{t('Новое задание', 'New job')}</Action>} />
     {list.isPending && <LoadingSkeleton label={t('Загрузка очереди', 'Loading queue')} />}
     <FormError message={list.error && errorMessage(list.error, t)} />
@@ -256,8 +326,8 @@ export function DeploymentsPage({ session, t }: Props) {
       <Action secondary disabled={offset === 0} onClick={() => setOffset(offset - pageSize)}>{t('Предыдущая', 'Previous')}</Action>
       <Action secondary disabled={offset + pageSize >= (list.data?.total ?? 0)} onClick={() => setOffset(offset + pageSize)}>{t('Следующая', 'Next')}</Action>
     </div>}
-    {creating && <NewJob session={session} t={t} close={() => setCreating(false)} created={id => {
-      setCreating(false); setSelected(id); void client.invalidateQueries({ queryKey: ['deployments'] })
+    {creating && <NewJob session={session} t={t} preset={preset} close={() => { setCreating(false); clearPreset() }} created={id => {
+      setCreating(false); clearPreset(); setSelected(id); void client.invalidateQueries({ queryKey: ['deployments'] })
     }} />}
   </Panel>
 }

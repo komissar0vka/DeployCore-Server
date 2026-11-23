@@ -64,7 +64,7 @@ func (serviceHandler) Execute(_ []string, changes <-chan svc.ChangeRequest, stat
 				return
 			}
 			transport := JobTransport{client: client, state: state, journal: journal, log: logger,
-				save: func(value JobJournal) error { return saveProtectedJSON(path, value) }}
+				save: func(value JobJournal) error { return saveProtectedJSON(path, value) }, execute: windowsExecutor(directory)}
 			transport.run(ctx)
 		},
 	}

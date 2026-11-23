@@ -29,6 +29,7 @@ class Permission(StrEnum):
     READ = "read"
     MANAGE_OPERATIONS = "manage_operations"
     MANAGE_SYSTEM = "manage_system"
+    MANAGE_REMOVALS = "manage_removals"
 
 
 PERMISSIONS = {

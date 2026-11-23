@@ -79,12 +79,13 @@ function SecretBox({ value, t, close }: { value: string; t: Translate; close: ()
 
 type SortKey = 'hostname' | 'status' | 'os' | 'agent' | 'last_seen'
 
-export function DevicesPage({ session, t, openInstaller, initialSearch = '', initialStatus = 'all', selected, onSelect, onFilter, inventory }: Props & {
+export function DevicesPage({ session, t, openInstaller, initialSearch = '', initialStatus = 'all', selected, onSelect, onFilter, inventory, onSoftware }: Props & {
   openInstaller: () => void
   initialSearch?: string
   initialStatus?: DeviceStatusFilter
   selected?: string
   onSelect: (device?: string) => void
+  onSoftware: (deviceId: string, deviceName: string) => void
   onFilter: (query: string, status: DeviceStatusFilter) => void
   inventory: boolean
 }) {
@@ -102,7 +103,7 @@ export function DevicesPage({ session, t, openInstaller, initialSearch = '', ini
       q: term, status, offset: String(page * pageSize), limit: String(pageSize), sort: sort.key, direction: sort.direction,
     })}`),
   })
-  if (selected) return <Computer key={selected} id={selected} session={session} t={t} back={() => onSelect()} inventory={inventory} />
+  if (selected) return <Computer key={selected} id={selected} session={session} t={t} back={() => onSelect()} inventory={inventory} onSoftware={onSoftware} />
 
   const items = devices.data?.items ?? []
   const pageSelected = items.length > 0 && items.every(device => selection.has(device.id))
@@ -280,19 +281,20 @@ export function DevicesPage({ session, t, openInstaller, initialSearch = '', ini
   </div>
 }
 
-function Computer({ id, session, t, back, inventory }: Props & { id: string; back: () => void; inventory: boolean }) {
+function Computer({ id, session, t, back, inventory, onSoftware }: Props & { id: string; back: () => void; inventory: boolean; onSoftware: (deviceId: string, deviceName: string) => void }) {
   const queryClient = useQueryClient()
   const detail = useQuery({ queryKey: ['device', id], queryFn: () => api<DeviceDetail>(`/devices/${id}`) })
   const [secret, setSecret] = useState<string | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   const [issuing, setIssuing] = useState(false)
   const [softwareFilter, setSoftwareFilter] = useState('')
-  const [tab, setTab] = useState<'overview' | 'hardware' | 'software' | 'events'>(inventory ? 'hardware' : 'overview')
+  const [tab, setTab] = useState<'overview' | 'hardware' | 'software' | 'management' | 'events'>(inventory ? 'hardware' : 'overview')
   const [confirmation, setConfirmation] = useState<'revoke' | 'delete' | null>(null)
   const tabs = [
     ['overview', t('Обзор', 'Overview')],
     ['hardware', t('Оборудование', 'Hardware')],
     ['software', t('Программы', 'Software')],
+    ['management', t('Управление ПО', 'Software management')],
     ['events', t('События', 'Events')],
   ] as const
   const writable = session.user.role !== 'viewer'
@@ -414,6 +416,12 @@ function Computer({ id, session, t, back, inventory }: Props & { id: string; bac
               <span>{program.name}</span><span className="text-muted-foreground">{program.version}</span><span className="text-muted-foreground">{program.publisher}</span>
             </li>)}
         </ul>
+      </Panel>}
+      {tab === 'management' && <Panel>
+        <SectionTitle title={t('Управление ПО', 'Software management')} />
+        {writable && !computer.device.agent_revoked
+          ? <Action onClick={() => onSoftware(id, computer.device.hostname)}>{t('Создать задание для этого ПК', 'Create a job for this computer')}</Action>
+          : <EmptyState title={t('Создание заданий недоступно', 'Job creation unavailable')} />}
       </Panel>}
       {tab === 'events' && <Panel>
         <h2 className="mb-3 text-lg font-semibold">{t('История событий', 'Event history')}</h2>

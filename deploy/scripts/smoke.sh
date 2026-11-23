@@ -6,6 +6,7 @@ scratch="$(mktemp -d)"
 export POSTGRES_PASSWORD="$(openssl rand -hex 32)"
 export DEPLOYCORE_SETUP_TOKEN="$(openssl rand -hex 32)"
 export DEPLOYCORE_PACKAGE_MAX_MIB=16
+export DEPLOYCORE_ENABLE_EXECUTION=1
 export DEPLOYCORE_PACKAGE_CA_FILE=/tmp/catalog-smoke-ca.pem
 export POSTGRES_USER=deploycore
 export POSTGRES_DB=deploycore
@@ -49,7 +50,7 @@ test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT
     -c "UPDATE installation_settings SET instance_name='Pre-catalog instance' WHERE id=1"
 "${compose[@]}" up -d --no-build --wait --wait-timeout 120
 test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT instance_name FROM installation_settings WHERE id=1")" = 'Pre-catalog instance'
-test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT version_num FROM alembic_version")" = '0004_deployment_queue'
+test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT version_num FROM alembic_version")" = '0005_execution'
 echo 'Upgrade from 0002 preserved existing settings'
 
 request --fail "$base/" > "$scratch/index.html"

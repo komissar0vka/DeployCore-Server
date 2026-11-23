@@ -224,7 +224,7 @@ func addRegistrySoftware(ctx context.Context, root registry.Key, path string, vi
 	return nil
 }
 
-func installedSoftware(ctx context.Context) ([]Software, error) {
+func machineSoftware(ctx context.Context) (map[Software]struct{}, error) {
 	items := make(map[Software]struct{})
 	views := []uint32{registry.WOW64_64KEY, registry.WOW64_32KEY}
 	for _, view := range views {
@@ -232,6 +232,15 @@ func installedSoftware(ctx context.Context) ([]Software, error) {
 			return nil, fmt.Errorf("read machine uninstall registry: %w", err)
 		}
 	}
+	return items, nil
+}
+
+func installedSoftware(ctx context.Context) ([]Software, error) {
+	items, err := machineSoftware(ctx)
+	if err != nil {
+		return nil, err
+	}
+	views := []uint32{registry.WOW64_64KEY, registry.WOW64_32KEY}
 	profiles, err := registry.USERS.ReadSubKeyNames(-1)
 	if err == nil {
 		for _, profile := range profiles {

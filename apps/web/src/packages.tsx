@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Package, Plus } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
+import type { DeploymentPreset } from './deployments'
 import { api, type Session } from './api'
 import { Dialog } from './components/ui/dialog'
 import { ConfirmDialog, EmptyState, LoadingSkeleton, SectionTitle, StatusBadge } from './design'
@@ -10,6 +11,7 @@ interface ProductFields { name: string; publisher: string; description: string }
 interface Product extends ProductFields { id: string }
 interface Artifact { filename: string; size_bytes: number; sha256: string; signature: 'verified' | 'unverified' }
 type Detection = { kind: 'msi_product'; product_code: string } | { kind: 'registry_software'; display_name: string; version: string }
+  | { kind: 'file_exists'; path: string } | { kind: 'file_version'; path: string; version: string }
 interface VersionInput {
   version: string
   architecture: 'x64' | 'x86'
@@ -65,7 +67,9 @@ function VersionDialog({ t, close, save, pending, error }: {
       timeout_seconds: Number(read('timeout')), success_codes: read('codes').split(',').map(value => Number(value.trim())),
       reboot_required: fields.has('reboot'),
       detection: detection === 'msi_product' ? { kind: detection, product_code: read('productCode') }
-        : { kind: detection, display_name: read('display'), version: read('detectedVersion') },
+        : detection === 'registry_software' ? { kind: detection, display_name: read('display'), version: read('detectedVersion') }
+        : detection === 'file_version' ? { kind: detection, path: read('filePath'), version: read('detectedVersion') }
+        : { kind: detection, path: read('filePath') },
     })
   }
   return <Dialog title={t('Новая версия', 'New version')} close={close} closeLabel={t('Закрыть', 'Close')}>
@@ -93,12 +97,17 @@ function VersionDialog({ t, close, save, pending, error }: {
         <select className="input" aria-label={t('Правило обнаружения', 'Detection rule')} value={detection} onChange={event => setDetection(event.target.value as Detection['kind'])}>
           <option value="registry_software">{t('Имя и версия в реестре', 'Registry name and version')}</option>
           <option value="msi_product">MSI ProductCode</option>
+          <option value="file_exists">{t('Наличие файла', 'File exists')}</option>
+          <option value="file_version">{t('Версия файла', 'File version')}</option>
         </select>
       </label>
       {detection === 'msi_product' ? <Field name="productCode" label="MSI ProductCode" required maxLength={38} />
-        : <div className="grid gap-3 sm:grid-cols-2">
+        : detection === 'registry_software' ? <div className="grid gap-3 sm:grid-cols-2">
           <Field name="display" label={t('Имя в реестре', 'Registry display name')} required maxLength={160} />
           <Field name="detectedVersion" label={t('Версия в реестре', 'Registry version')} required maxLength={120} />
+        </div> : <div className="grid gap-3">
+          <Field name="filePath" label={t('Абсолютный путь к файлу', 'Absolute file path')} required maxLength={240} />
+          {detection === 'file_version' && <Field name="detectedVersion" label={t('Версия файла', 'File version')} required placeholder="1.0.0.0" />}
         </div>}
       <FormError message={error ? errorMessage(error, t) : null} />
       <Action type="submit" disabled={pending}>{t('Добавить версию', 'Add version')}</Action>
@@ -141,7 +150,7 @@ function UploadForm({ path, installer, csrf, t, uploaded }: {
   </form>
 }
 
-function ProductDetails({ id, back, session, t }: Props & { id: string; back: () => void }) {
+function ProductDetails({ id, back, session, t, deploy }: Props & { id: string; back: () => void; deploy: (preset: DeploymentPreset) => void }) {
   const client = useQueryClient()
   const path = '/packages/' + id
   const query = useQuery({ queryKey: ['package', id], queryFn: () => api<Product & { versions: Version[] }>(path) })
@@ -189,7 +198,8 @@ function ProductDetails({ id, back, session, t }: Props & { id: string; back: ()
                 <dt>{t('Таймаут и коды завершения', 'Timeout and exit codes')}</dt><dd>{version.timeout_seconds} s · {version.success_codes.join(', ')}</dd>
                 <dt>{t('Перезагрузка', 'Restart')}</dt><dd>{version.reboot_required ? t('Требуется', 'Required') : t('По результату', 'Based on result')}</dd>
                 <dt>{t('Обнаружение', 'Detection')}</dt><dd className="break-all">{version.detection.kind === 'msi_product'
-                  ? version.detection.product_code : `${version.detection.display_name} · ${version.detection.version}`}</dd>
+                  ? version.detection.product_code : version.detection.kind === 'registry_software' ? `${version.detection.display_name} · ${version.detection.version}`
+                  : version.detection.kind === 'file_version' ? `${version.detection.path} · ${version.detection.version}` : version.detection.path}</dd>
                 <dt>{t('Аргументы установки', 'Installation arguments')}</dt><dd className="break-all font-mono">{JSON.stringify(version.install_args)}</dd>
                 <dt>{t('Аргументы удаления', 'Removal arguments')}</dt><dd className="break-all font-mono">{version.uninstall_args === null ? '—' : JSON.stringify(version.uninstall_args)}</dd>
               </dl>
@@ -201,6 +211,9 @@ function ProductDetails({ id, back, session, t }: Props & { id: string; back: ()
                 </StatusBadge></div>
                 {writable && <div className="flex flex-wrap items-center gap-3">
                   <a className="text-primary hover:underline" href={'/api/v1' + artifactPath} download>{t('Скачать установщик', 'Download installer')}</a>
+                  {version.approved_at && <Action onClick={() => deploy({ packageId: id, versionId: version.id, productName: product.name })}>
+                    {t('Установить', 'Install')}
+                  </Action>}
                   {!version.approved_at && version.artifact.signature === 'verified' &&
                     <Action disabled={approval.isPending} onClick={() => approval.mutate(version.id)}>{t('Утвердить версию', 'Approve version')}</Action>}
                 </div>}
@@ -222,7 +235,7 @@ function ProductDetails({ id, back, session, t }: Props & { id: string; back: ()
   </div>
 }
 
-export function PackageCatalog({ session, t }: Props) {
+export function PackageCatalog({ session, t, deploy }: Props & { deploy: (preset: DeploymentPreset) => void }) {
   const client = useQueryClient()
   const [selected, setSelected] = useState<string>()
   const [search, setSearch] = useState('')
@@ -237,7 +250,7 @@ export function PackageCatalog({ session, t }: Props) {
     mutationFn: (body: ProductFields) => api<Product>('/packages', { method: 'POST', body, csrf: session.csrf_token }),
     onSuccess: record => { setOpen(false); setSelected(record.id); void client.invalidateQueries({ queryKey: ['packages'] }) },
   })
-  if (selected) return <ProductDetails id={selected} back={() => setSelected(undefined)} session={session} t={t} />
+  if (selected) return <ProductDetails id={selected} back={() => setSelected(undefined)} session={session} t={t} deploy={deploy} />
   return <Panel>
     <SectionTitle title={t('Каталог программ', 'Software catalog')} actions={session.user.role !== 'viewer' &&
       <Action onClick={() => { create.reset(); setOpen(true) }}><Plus className="size-4" aria-hidden />{t('Новая программа', 'New program')}</Action>} />

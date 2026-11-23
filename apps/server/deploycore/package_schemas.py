@@ -42,7 +42,21 @@ class RegistrySoftware(Wire):
     version: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120, pattern=r"^[^\x00-\x1f\x7f]+$")]
 
 
-Detection = Annotated[MSIProduct | RegistrySoftware, Field(discriminator="kind")]
+LocalPath = Annotated[str, StringConstraints(max_length=240, pattern=r"^[A-Za-z]:\\[^:\x00-\x1f]+$")]
+
+
+class FileExists(Wire):
+    kind: Literal["file_exists"]
+    path: LocalPath
+
+
+class FileVersion(Wire):
+    kind: Literal["file_version"]
+    path: LocalPath
+    version: Annotated[str, StringConstraints(pattern=r"^[0-9]{1,5}(\.[0-9]{1,5}){3}$")]
+
+
+Detection = Annotated[MSIProduct | RegistrySoftware | FileExists | FileVersion, Field(discriminator="kind")]
 
 
 class VersionInput(Wire):

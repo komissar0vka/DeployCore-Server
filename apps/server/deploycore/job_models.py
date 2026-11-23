@@ -12,10 +12,12 @@ class DeploymentJob(Base):
     __table_args__ = (
         UniqueConstraint("created_by", "request_id", name="deployment_request_identity"),
         CheckConstraint("operation IN ('install', 'uninstall')", name="deployment_operation"),
+        CheckConstraint("mode IN ('transport_only', 'execute_v1')", name="deployment_mode"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     version_id: Mapped[UUID] = mapped_column(ForeignKey("software_versions.id"))
+    mode: Mapped[str] = mapped_column(String(16), server_default="transport_only")
     operation: Mapped[str] = mapped_column(String(12))
     created_by: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
     request_id: Mapped[UUID]
@@ -26,17 +28,17 @@ class DeploymentTarget(Base):
     __tablename__ = "deployment_targets"
     __table_args__ = (
         UniqueConstraint("job_id", "device_id", name="deployment_device_identity"),
-        CheckConstraint("state IN ('queued', 'leased', 'running', 'not_executed', 'cancelled', 'failed')",
+        CheckConstraint("state IN ('queued', 'leased', 'running', 'not_executed', 'cancelled','failed','succeeded','already_installed','already_absent','reboot_required','unknown')",
                         name="deployment_target_state"),
         Index("deployment_one_active_target", "device_id", unique=True,
-              postgresql_where=text("state IN ('leased', 'running')")),
+              postgresql_where=text("state IN ('leased', 'running', 'unknown')")),
         Index("deployment_target_device_state", "device_id", "state"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     job_id: Mapped[UUID] = mapped_column(ForeignKey("deployment_jobs.id"))
     device_id: Mapped[UUID] = mapped_column(ForeignKey("devices.id"))
-    state: Mapped[str] = mapped_column(String(16), default="queued")
+    state: Mapped[str] = mapped_column(String(32), default="queued")
     cancel_requested: Mapped[bool] = mapped_column(default=False)
 
 
@@ -45,7 +47,7 @@ class DeploymentAttempt(Base):
     __table_args__ = (
         UniqueConstraint("target_id", "number", name="deployment_attempt_number"),
         CheckConstraint("number BETWEEN 1 AND 5", name="deployment_attempt_range"),
-        CheckConstraint("outcome IS NULL OR outcome IN ('expired', 'not_executed', 'cancelled')",
+        CheckConstraint("outcome IS NULL OR outcome IN ('expired','not_executed','cancelled','failed','succeeded','already_installed','already_absent','reboot_required','unknown')",
                         name="deployment_attempt_outcome"),
     )
 
@@ -56,7 +58,12 @@ class DeploymentAttempt(Base):
     lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    outcome: Mapped[str | None] = mapped_column(String(16))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    stage: Mapped[str | None] = mapped_column(String(16))
+    exit_code: Mapped[int | None] = mapped_column(BigInteger)
+    diagnostic: Mapped[str | None] = mapped_column(String(32))
+    output_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    outcome: Mapped[str | None] = mapped_column(String(32))
 
 
 class DeploymentEvent(Base):

@@ -7,10 +7,19 @@ from pydantic import Field, field_validator
 from .device_schemas import Wire
 
 Operation = Literal["install", "uninstall"]
-TargetState = Literal["queued", "leased", "running", "not_executed", "cancelled", "failed"]
+TargetState = Literal["queued", "leased", "running", "not_executed", "cancelled", "failed",
+                      "succeeded", "already_installed", "already_absent", "reboot_required", "unknown"]
+Mode = Literal["transport_only", "execute_v1"]
+Stage = Literal["checking", "downloading", "executing", "verifying"]
+Outcome = Literal["not_executed", "cancelled", "failed", "succeeded", "already_installed",
+                  "already_absent", "reboot_required", "unknown"]
+Diagnostic = Literal["download_failed", "hash_mismatch", "insufficient_space", "detection_failed", "installer_error",
+                     "timeout", "interrupted", "platform_unsupported", "manifest_invalid", "process_error",
+                     "operator_resolved"]
 
 
 class JobInput(Wire):
+    mode: Mode = "transport_only"
     version_id: UUID
     operation: Operation
     device_ids: Annotated[list[UUID], Field(min_length=1, max_length=100)]
@@ -25,6 +34,7 @@ class JobInput(Wire):
 
 
 class JobView(Wire):
+    mode: Mode
     id: UUID
     version_id: UUID
     package_name: str
@@ -49,6 +59,10 @@ class TargetView(Wire):
     attempt: int | None
     lease_expires_at: datetime | None
     recovery_required: bool
+    stage: Stage | None = None
+    exit_code: int | None = None
+    diagnostic: Diagnostic | None = None
+    output_bytes: int | None = None
 
 
 class JobDetail(JobView):
@@ -69,7 +83,7 @@ class Assignment(Wire):
     version_id: UUID
     operation: Operation
     lease_expires_at: datetime
-    mode: Literal["transport_only"] = "transport_only"
+    mode: Mode = "transport_only"
 
 
 class PollReply(Wire):
@@ -81,10 +95,21 @@ class Lease(Wire):
     attempt_id: UUID
 
 
+class Heartbeat(Lease):
+    stage: Stage | None = None
+
+
 class LeaseReply(Wire):
     lease_expires_at: datetime
     cancel_requested: bool
 
 
 class Result(Lease):
-    outcome: Literal["not_executed", "cancelled"]
+    outcome: Outcome
+    exit_code: Annotated[int, Field(strict=True, ge=0, le=4294967295)] | None = None
+    diagnostic: Diagnostic | None = None
+    output_bytes: Annotated[int, Field(strict=True, ge=0, le=2**63 - 1)] | None = None
+
+
+class Resolve(Wire):
+    verified_stopped: Literal[True]

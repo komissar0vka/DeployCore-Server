@@ -32,6 +32,9 @@ export function errorMessage(error: unknown, t: Translate) {
     deployment_devices_unavailable: t('Часть выбранных устройств недоступна для заданий.', 'Some devices are unavailable for deployments.'),
     deployment_version_unavailable: t('Для задания выберите утверждённую версию с установщиком.', 'Select an approved version with an installer.'),
     deployment_uninstall_unavailable: t('Для этой версии удаление не разрешено.', 'Removal is unavailable for this version.'),
+    deployment_execution_disabled: t('Запуск программ отключён политикой сервера.', 'Program execution is disabled by server policy.'),
+    deployment_agent_incompatible: t('Для выбранных устройств нужен Agent 0.3.4 или новее.', 'Selected devices require Agent 0.3.4 or later.'),
+    deployment_manifest_invalid: t('Манифест содержит неподдерживаемые параметры для этой операции.', 'The manifest contains unsupported options for this operation.'),
     deployment_request_conflict: t('Состав задания изменился. Создайте новое задание.', 'The submission changed. Create a new job.'),
     csrf_invalid: t('Проверка запроса не пройдена. Обновите страницу.', 'Request verification failed. Reload the page.'),
   }

@@ -8,7 +8,7 @@ import { AppShell, inDevelopment, sections, useConsoleRoute } from './console-sh
 import { Dashboard } from './dashboard'
 import { AgentInstallPage, DevicesPage } from './devices'
 import { EmptyState, LoadingSkeleton, StatusBadge } from './design'
-import { DeploymentsPage } from './deployments'
+import { DeploymentsPage, type DeploymentPreset } from './deployments'
 import { PackageCatalog } from './packages'
 import { Login, SetupWizard } from './setup'
 import { Action, FormError, errorMessage, Panel, translator, type Translate } from './ui'
@@ -101,6 +101,11 @@ function Console({ session, initialLanguage }: { session: Session; initialLangua
   }, [language])
 
   const openInstaller = () => navigate({ section: 'agent' })
+  const [deploymentPreset, setDeploymentPreset] = useState<DeploymentPreset>()
+  function openDeployment(preset?: DeploymentPreset) {
+    setDeploymentPreset(preset)
+    navigate({ section: 'jobs' })
+  }
   const section = route.section
   const pending = inDevelopment[section]
   const PendingIcon = sections[section][2]
@@ -112,7 +117,7 @@ function Console({ session, initialLanguage }: { session: Session; initialLangua
       openInstaller={session.user.role !== 'viewer' ? openInstaller : undefined}
       openDevices={status => navigate({ section: 'devices', status })}
       openInventory={() => navigate({ section: 'inventory' })}
-      openJobs={() => navigate({ section: 'jobs' })}
+      openJobs={() => openDeployment()}
       health={<footer className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
         <HealthCard kind="live" t={t} /><HealthCard kind="ready" t={t} />
         <div className="flex items-center justify-between gap-2 rounded-xl border border-border bg-card px-3 py-2.5 text-sm">
@@ -124,9 +129,9 @@ function Console({ session, initialLanguage }: { session: Session; initialLangua
       initialSearch={route.search} initialStatus={route.status}
       selected={route.device} onSelect={device => navigate({ ...route, device })}
       onFilter={(search, status) => navigate({ section, search, status })}
-      inventory={section === 'inventory'} />}
-    {section === 'jobs' && <DeploymentsPage session={session} t={t} />}
-    {section === 'software' && <PackageCatalog session={session} t={t} />}
+      inventory={section === 'inventory'} onSoftware={(deviceId, deviceName) => openDeployment({ deviceId, deviceName })} />}
+    {section === 'jobs' && <DeploymentsPage session={session} t={t} preset={deploymentPreset} clearPreset={() => setDeploymentPreset(undefined)} />}
+    {section === 'software' && <PackageCatalog session={session} t={t} deploy={openDeployment} />}
     {section === 'agent' && <AgentInstallPage session={session} t={t} server={settings.data?.agent_url ?? window.location.origin} />}
     {section === 'settings' && (settings.data
       ? <SettingsPage settings={settings.data} session={session} t={t} health={<HealthCard kind="ready" t={t} />} />

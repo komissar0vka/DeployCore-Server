@@ -1,3 +1,5 @@
+import os
+import re
 from datetime import timedelta
 from typing import Annotated
 from uuid import UUID
@@ -10,16 +12,47 @@ from .device_api import AgentDevice
 from .device_models import Agent, Device
 from .job_models import DeploymentAttempt as Attempt, DeploymentEvent as Event, DeploymentJob as Job, DeploymentTarget as Target
 from .models import User
-from .package_models import PackageArtifact, SoftwarePackage, SoftwareVersion
+from .package_models import PackageArtifact, PackageDetectionRule, SoftwarePackage, SoftwareVersion
 from .package_storage import artifact_path
-from .security import Db, Permission, audit, require
+from .security import PERMISSIONS, Db, Permission, Role, audit, require
 
 router = APIRouter(prefix="/api/v1")
 Reader = Annotated[User, Depends(require(Permission.READ))]
 Operator = Annotated[User, Depends(require(Permission.MANAGE_OPERATIONS))]
 LEASE = timedelta(seconds=120)
-ACTIVE = ("leased", "running")
+ACTIVE = ("leased", "running", "unknown")
 MAX_ATTEMPTS = 5
+
+
+def execution_enabled() -> bool:
+    return os.getenv("DEPLOYCORE_ENABLE_EXECUTION") == "1"
+
+
+def supports_execution(version: str) -> bool:
+    return bool(re.fullmatch(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}", version)) and tuple(map(int, version.split("."))) >= (0, 3, 4)
+
+
+def validate_execution(version, detection, operation):
+    args = version.uninstall_args if operation == "uninstall" else version.install_args
+    if sum(len(arg.encode()) for arg in args or []) > 8192:
+        raise HTTPException(422, "deployment_manifest_invalid")
+    if version.installer != "msi":
+        if operation == "uninstall" and not version.uninstall_args:
+            raise HTTPException(422, "deployment_manifest_invalid")
+        return
+    if operation == "uninstall" and detection.kind != "msi_product":
+        raise HTTPException(422, "deployment_manifest_invalid")
+    flags = 0
+    for arg in args or []:
+        if arg.lower() in {"/qn", "/qb"}:
+            flags += 1
+        elif arg.lower() != "/norestart" and (
+            not re.fullmatch(r"[A-Z][A-Z0-9_]{0,71}=.*", arg)
+            or arg.partition("=")[0] in {"TRANSFORMS", "PATCH", "REBOOT", "REBOOTPROMPT", "ACTION", "SOURCELIST"}
+        ):
+            raise HTTPException(422, "deployment_manifest_invalid")
+    if flags > 1:
+        raise HTTPException(422, "deployment_manifest_invalid")
 
 
 def clock(db: Db):
@@ -50,7 +83,7 @@ def counts_for(db: Db, ids: list[UUID]) -> dict:
 
 def view(job: Job, version: str, name: str, counts: dict) -> wire.JobView:
     return wire.JobView(id=job.id, version_id=job.version_id, package_name=name, version=version,
-                        operation=job.operation, created_at=job.created_at, counts=counts)
+                        operation=job.operation, mode=job.mode, created_at=job.created_at, counts=counts)
 
 
 def get_view(db: Db, job_id: UUID) -> wire.JobView:
@@ -68,12 +101,14 @@ def last_attempt(db: Db, target_id: UUID) -> Attempt | None:
 
 @router.post("/deployments", tags=["Deployments"], status_code=201)
 def create_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) -> wire.JobView:
+    if data.mode == "execute_v1" and data.operation == "uninstall" and Permission.MANAGE_REMOVALS not in PERMISSIONS[Role(actor.role)]:
+        raise HTTPException(403, "permission_denied")
     db.execute(text("SELECT pg_advisory_xact_lock(4, hashtext(:key))"),
                {"key": f"{actor.id}:{data.request_id}"})
     existing = db.scalar(select(Job).where(Job.created_by == actor.id, Job.request_id == data.request_id))
     if existing is not None:
         device_ids = set(db.scalars(select(Target.device_id).where(Target.job_id == existing.id)))
-        if existing.version_id != data.version_id or existing.operation != data.operation or device_ids != set(data.device_ids):
+        if existing.version_id != data.version_id or existing.operation != data.operation or existing.mode != data.mode or device_ids != set(data.device_ids):
             raise HTTPException(409, "deployment_request_conflict")
         result = get_view(db, existing.id)
         db.commit()
@@ -91,21 +126,28 @@ def create_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) -
         raise HTTPException(503, "package_storage_unavailable")
     if data.operation == "uninstall" and row[0].uninstall_args is None:
         raise HTTPException(409, "deployment_uninstall_unavailable")
-    devices = list(db.scalars(
-        select(Device.id).join(Agent, Agent.device_id == Device.id)
+    if data.mode == "execute_v1":
+        if not execution_enabled():
+            raise HTTPException(409, "deployment_execution_disabled")
+        validate_execution(row[0], db.get_one(PackageDetectionRule, data.version_id), data.operation)
+    devices = list(db.execute(
+        select(Device.id, Device.agent_version).join(Agent, Agent.device_id == Device.id)
         .where(Device.id.in_(data.device_ids), Device.deleted_at.is_(None), Agent.revoked_at.is_(None))
     ))
     if len(devices) != len(data.device_ids):
         raise HTTPException(422, "deployment_devices_unavailable")
 
-    job = Job(version_id=data.version_id, operation=data.operation, created_by=actor.id, request_id=data.request_id)
+    if data.mode == "execute_v1" and not all(supports_execution(version) for _, version in devices):
+        raise HTTPException(422, "deployment_agent_incompatible")
+
+    job = Job(version_id=data.version_id, operation=data.operation, created_by=actor.id, request_id=data.request_id, mode=data.mode)
     db.add(job)
     db.flush()
-    db.add_all(Target(job_id=job.id, device_id=device_id) for device_id in devices)
+    db.add_all(Target(job_id=job.id, device_id=device_id) for device_id, _ in devices)
     event(db, job.id, "created")
     audit(db, request, "deployment_created", actor=actor,
           details={"job_id": str(job.id), "version_id": str(job.version_id), "operation": job.operation,
-                   "target_count": str(len(devices))})
+                   "target_count": str(len(devices)), "mode": data.mode})
     result = view(job, row[0].version, row[1].name, {"queued": len(devices)})
     db.commit()
     return result
@@ -135,15 +177,17 @@ def job_detail(job_id: UUID, db: Db, actor: Reader) -> wire.JobDetail:
     latest = (select(Attempt).where(Attempt.target_id == Target.id).order_by(Attempt.number.desc())
               .limit(1).correlate(Target).lateral())
     rows = db.execute(
-        select(Target, Device.hostname, latest.c.number, latest.c.lease_expires_at).select_from(Target)
+        select(Target, Device.hostname, latest.c.number, latest.c.lease_expires_at,
+               latest.c.stage, latest.c.exit_code, latest.c.diagnostic, latest.c.output_bytes).select_from(Target)
         .join(Device, Device.id == Target.device_id).outerjoin(latest, text("true"))
         .where(Target.job_id == job_id).order_by(Device.hostname, Device.id)
     )
     targets = [wire.TargetView(
         id=target.id, device_id=target.device_id, hostname=name, state=target.state,
         cancel_requested=target.cancel_requested, attempt=number, lease_expires_at=expires if target.state in ACTIVE else None,
-        recovery_required=target.state == "running" and expires is not None and expires <= now,
-    ) for target, name, number, expires in rows]
+        recovery_required=target.state == "unknown" or (target.state == "running" and expires is not None and expires <= now),
+        stage=stage, exit_code=code, diagnostic=diagnostic, output_bytes=output,
+    ) for target, name, number, expires, stage, code, diagnostic, output in rows]
     db.commit()
     return wire.JobDetail(**summary.model_dump(), targets=targets)
 
@@ -190,21 +234,25 @@ def assignment(db: Db, target: Target, attempt: Attempt) -> wire.PollReply:
     job = db.get_one(Job, target.job_id)
     return wire.PollReply(assignment=wire.Assignment(
         target_id=target.id, attempt_id=attempt.id, version_id=job.version_id,
-        operation=job.operation, lease_expires_at=attempt.lease_expires_at,
+        operation=job.operation, mode=job.mode, lease_expires_at=attempt.lease_expires_at,
     ))
 
 
 @router.post("/agent/{device_id}/jobs/poll", tags=["Agent Jobs"])
-def poll(db: Db, device: AgentDevice) -> wire.PollReply:
+def poll(request: Request, db: Db, device: AgentDevice) -> wire.PollReply:
+    execute = execution_enabled() and supports_execution(device.agent_version) and request.headers.get("x-deploycore-capabilities") == "execute_v1"
     # require_agent serializes requests for this device. The unique partial index is a second line of defense.
     active = db.scalar(select(Target).where(Target.device_id == device.id, Target.state.in_(ACTIVE)).with_for_update())
     if active is not None:
         attempt = last_attempt(db, active.id)
-        if active.state == "running":
+        if active.state in ("running", "unknown"):
             db.commit()
             return wire.PollReply(recovery_required=True)
         now = clock(db)
         if attempt.lease_expires_at > now:
+            if db.get_one(Job, active.job_id).mode == "execute_v1" and not execute:
+                db.commit()
+                return wire.PollReply()
             reply = assignment(db, active, attempt)
             db.commit()
             return reply
@@ -214,7 +262,7 @@ def poll(db: Db, device: AgentDevice) -> wire.PollReply:
         db.flush()
     target = db.scalar(
         select(Target).join(Job, Job.id == Target.job_id)
-        .where(Target.device_id == device.id, Target.state == "queued")
+        .where(Target.device_id == device.id, Target.state == "queued", Job.mode.in_(("transport_only", "execute_v1") if execute else ("transport_only",)))
         .order_by(Job.created_at, Job.id).limit(1).with_for_update(of=Target)
     )
     if target is None:
@@ -243,7 +291,7 @@ def attempt_for(db: Db, device: Device, target_id: UUID, attempt_id: UUID) -> tu
     return target, attempt
 
 
-def renew(db: Db, target: Target, attempt: Attempt, *, ack: bool) -> wire.LeaseReply:
+def renew(db: Db, target: Target, attempt: Attempt, *, ack: bool, stage: wire.Stage | None = None) -> wire.LeaseReply:
     now = clock(db)
     if attempt.finished_at is not None or target.state not in ACTIVE:
         raise HTTPException(409, "deployment_lease_conflict")
@@ -257,6 +305,16 @@ def renew(db: Db, target: Target, attempt: Attempt, *, ack: bool) -> wire.LeaseR
         raise HTTPException(409, "deployment_lease_conflict")
     elif attempt.lease_expires_at <= now:
         event(db, target.job_id, "recovered", target, attempt)
+    if stage is not None:
+        if db.get_one(Job, target.job_id).mode != "execute_v1":
+            raise HTTPException(409, "deployment_mode_conflict")
+        if (attempt.started_at is None and stage not in ("checking", "downloading")) or (
+            attempt.started_at is not None and stage not in ("executing", "verifying")
+        ):
+            raise HTTPException(409, "deployment_stage_conflict")
+        if attempt.stage != stage:
+            attempt.stage = stage
+            event(db, target.job_id, stage, target, attempt)
     attempt.lease_expires_at = now + LEASE
     result = wire.LeaseReply(lease_expires_at=attempt.lease_expires_at, cancel_requested=target.cancel_requested)
     db.commit()
@@ -269,22 +327,33 @@ def acknowledge(target_id: UUID, data: wire.Lease, db: Db, device: AgentDevice) 
 
 
 @router.post("/agent/{device_id}/jobs/{target_id}/heartbeat", tags=["Agent Jobs"])
-def heartbeat(target_id: UUID, data: wire.Lease, db: Db, device: AgentDevice) -> wire.LeaseReply:
-    return renew(db, *attempt_for(db, device, target_id, data.attempt_id), ack=False)
+def heartbeat(target_id: UUID, data: wire.Heartbeat, db: Db, device: AgentDevice) -> wire.LeaseReply:
+    return renew(db, *attempt_for(db, device, target_id, data.attempt_id), ack=False, stage=data.stage)
 
 
-@router.post("/agent/{device_id}/jobs/{target_id}/result", tags=["Agent Jobs"])
+@router.post("/agent/{device_id}/jobs/{target_id}/result", tags=["Agent Jobs"], response_model_exclude_none=True)
 def submit_result(target_id: UUID, data: wire.Result, db: Db, device: AgentDevice) -> wire.Result:
     target, attempt = attempt_for(db, device, target_id, data.attempt_id)
+    mode = db.get_one(Job, target.job_id).mode
+    proposed = (data.outcome, data.exit_code, data.diagnostic, data.output_bytes)
+    if (mode == "transport_only" and (data.outcome not in ("not_executed", "cancelled") or any(x is not None for x in proposed[1:]))) or (
+        mode == "execute_v1" and data.outcome == "not_executed"
+    ):
+        raise HTTPException(422, "deployment_mode_conflict")
     if attempt.finished_at is not None:
-        if attempt.acknowledged_at is None or attempt.outcome != data.outcome:
+        if attempt.diagnostic != "operator_resolved" and (attempt.acknowledged_at is None or proposed != (attempt.outcome, attempt.exit_code, attempt.diagnostic, attempt.output_bytes)):
             raise HTTPException(409, "deployment_result_conflict")
     else:
         if attempt.acknowledged_at is None or target.state != "running":
             raise HTTPException(409, "deployment_lease_conflict")
         if data.outcome == "cancelled" and not target.cancel_requested:
             raise HTTPException(409, "deployment_cancel_not_requested")
-        attempt.outcome, attempt.finished_at = data.outcome, clock(db)
+        if data.outcome in ("succeeded", "reboot_required") and (attempt.started_at is None or data.exit_code is None):
+            raise HTTPException(409, "deployment_start_required")
+        if data.outcome in ("already_installed", "already_absent") and attempt.started_at is not None:
+            raise HTTPException(409, "deployment_already_started")
+        attempt.outcome, attempt.exit_code, attempt.diagnostic, attempt.output_bytes = proposed
+        attempt.finished_at = clock(db)
         target.state = data.outcome
         event(db, target.job_id, data.outcome, target, attempt)
     db.commit()

@@ -150,6 +150,10 @@ func newClient(origin string, ca []byte) (*Client, error) {
 }
 
 func (c *Client) request(ctx context.Context, method, path, credential string, in, out any) error {
+	return c.requestWithCapability(ctx, method, path, credential, in, out, false)
+}
+
+func (c *Client) requestWithCapability(ctx context.Context, method, path, credential string, in, out any, execute bool) error {
 	var body io.Reader
 	if in != nil {
 		encoded, err := json.Marshal(in)
@@ -170,6 +174,9 @@ func (c *Client) request(ctx context.Context, method, path, credential string, i
 	}
 	if credential != "" {
 		req.Header.Set("Authorization", "Bearer "+credential)
+	}
+	if execute {
+		req.Header.Set("X-DeployCore-Capabilities", "execute_v1")
 	}
 	res, err := c.http.Do(req)
 	if err != nil {

@@ -47,7 +47,7 @@ class SoftwareVersion(Base):
 class PackageDetectionRule(Base):
     __tablename__ = "package_detection_rules"
     __table_args__ = (
-        CheckConstraint("kind IN ('msi_product', 'registry_software')", name="package_detection_kind"),
+        CheckConstraint("kind IN ('msi_product','registry_software','file_exists','file_version')", name="package_detection_kind"),
     )
 
     version_id: Mapped[UUID] = mapped_column(ForeignKey("software_versions.id"), primary_key=True)

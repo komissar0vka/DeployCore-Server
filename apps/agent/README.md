@@ -1,6 +1,6 @@
 # DeployCore Agent для Windows
 
-Агент v0.3.3 предназначен для Windows 10/11 x64 и Windows Server x64 с Windows PowerShell 5.1, CIM и реестром Windows. Служба `DeployCoreAgent` запускается автоматически под LocalSystem. Журнал доступен в Windows Event Viewer → Windows Logs → Application, источник `DeployCoreAgent`.
+Агент v0.3.4 предназначен для Windows 10/11 x64 и Windows Server x64 с Windows PowerShell 5.1, CIM и реестром Windows. Служба `DeployCoreAgent` запускается автоматически под LocalSystem. Журнал доступен в Windows Event Viewer → Windows Logs → Application, источник `DeployCoreAgent`.
 
 ## Установка
 
@@ -50,3 +50,5 @@ Heartbeat по умолчанию отправляется каждые 60 се�
 ## Очередь этапа B
 
 Агент 0.3.3 проверяет транспорт заданий через действующий HTTPS. До ACK он сохраняет попытку в `deployment.dpapi`. После перезапуска повторяет незавершённый обмен с тем же ID. Установщики в этой сборке не запускаются. [Протокол и восстановление](../../docs/releases/0.5.0-stage-b.md#протокол).
+
+[Установка и обновление Agent 0.3.4, протокол исполнения и тестовый запуск](../../docs/releases/0.5.0-stage-c.md).
