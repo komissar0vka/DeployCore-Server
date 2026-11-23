@@ -150,10 +150,10 @@ func newClient(origin string, ca []byte) (*Client, error) {
 }
 
 func (c *Client) request(ctx context.Context, method, path, credential string, in, out any) error {
-	return c.requestWithCapability(ctx, method, path, credential, in, out, false)
+	return c.requestWithCapability(ctx, method, path, credential, in, out, "")
 }
 
-func (c *Client) requestWithCapability(ctx context.Context, method, path, credential string, in, out any, execute bool) error {
+func (c *Client) requestWithCapability(ctx context.Context, method, path, credential string, in, out any, capabilities string) error {
 	var body io.Reader
 	if in != nil {
 		encoded, err := json.Marshal(in)
@@ -175,8 +175,8 @@ func (c *Client) requestWithCapability(ctx context.Context, method, path, creden
 	if credential != "" {
 		req.Header.Set("Authorization", "Bearer "+credential)
 	}
-	if execute {
-		req.Header.Set("X-DeployCore-Capabilities", "execute_v1")
+	if capabilities != "" {
+		req.Header.Set("X-DeployCore-Capabilities", capabilities)
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
@@ -187,7 +187,7 @@ func (c *Client) requestWithCapability(ctx context.Context, method, path, creden
 		return StatusError(res.StatusCode)
 	}
 	if out != nil {
-		return json.NewDecoder(io.LimitReader(res.Body, 16*1024)).Decode(out)
+		return json.NewDecoder(io.LimitReader(res.Body, 64*1024)).Decode(out)
 	}
 	return nil
 }

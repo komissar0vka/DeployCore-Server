@@ -5,17 +5,18 @@ from uuid import UUID
 from pydantic import Field, field_validator
 
 from .device_schemas import Wire
+from .package_schemas import DetectionState
 
 Operation = Literal["install", "uninstall"]
 TargetState = Literal["queued", "leased", "running", "not_executed", "cancelled", "failed",
-                      "succeeded", "already_installed", "already_absent", "reboot_required", "unknown"]
+                      "succeeded", "already_installed", "already_absent", "reboot_required", "awaiting_reboot", "unknown"]
 Mode = Literal["transport_only", "execute_v1"]
 Stage = Literal["checking", "downloading", "executing", "verifying"]
 Outcome = Literal["not_executed", "cancelled", "failed", "succeeded", "already_installed",
                   "already_absent", "reboot_required", "unknown"]
 Diagnostic = Literal["download_failed", "hash_mismatch", "insufficient_space", "detection_failed", "installer_error",
                      "timeout", "interrupted", "platform_unsupported", "manifest_invalid", "process_error",
-                     "operator_resolved"]
+                     "operator_resolved", "detection_mismatch", "reboot_timeout"]
 
 
 class JobInput(Wire):
@@ -63,6 +64,13 @@ class TargetView(Wire):
     exit_code: int | None = None
     diagnostic: Diagnostic | None = None
     output_bytes: int | None = None
+    started_at: datetime | None = None
+    process_started: bool | None = None
+    detection: DetectionState | None = None
+    reboot_deadline: datetime | None = None
+    reboot_detection: DetectionState | None = None
+    reboot_finished_at: datetime | None = None
+    reboot_diagnostic: Diagnostic | None = None
 
 
 class JobDetail(JobView):
@@ -109,6 +117,15 @@ class Result(Lease):
     exit_code: Annotated[int, Field(strict=True, ge=0, le=4294967295)] | None = None
     diagnostic: Diagnostic | None = None
     output_bytes: Annotated[int, Field(strict=True, ge=0, le=2**63 - 1)] | None = None
+
+
+    process_started: bool | None = None
+    detection: DetectionState | None = None
+    reboot_pending: Literal[True] | None = None
+
+
+class RebootResult(Lease):
+    detection: DetectionState | None
 
 
 class Resolve(Wire):

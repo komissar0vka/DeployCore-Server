@@ -9,7 +9,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestJobTransportResumesDurableResult(t *testing.T) {
@@ -87,5 +89,78 @@ func TestJobTransportResumesDurableResult(t *testing.T) {
 	defer lock.Unlock()
 	if calls["poll"] != 1 || calls["ack"] != 2 || calls["heartbeat"] != 1 || calls["result"] != 2 {
 		t.Fatalf("unexpected protocol calls: %v", calls)
+	}
+}
+
+func TestRebootVerificationResumesWithoutExecution(t *testing.T) {
+	state := testState(t, "https://deploycore.example")
+	job := Assignment{
+		TargetID: "11111111-1111-4111-8111-111111111111", AttemptID: "22222222-2222-4222-8222-222222222222",
+		VersionID: "33333333-3333-4333-8333-333333333333", Mode: "execute_v1", Operation: "install",
+	}
+	var initial, rechecks atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch action := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]; action {
+		case "result":
+			var result ExecutionResult
+			if err := json.NewDecoder(r.Body).Decode(&result); err != nil || !result.RebootPending || result.Outcome != "reboot_required" {
+				t.Error("pending reboot was not reported")
+			}
+			initial.Add(1)
+		case "reboot-result":
+			var result struct {
+				Detection DetectionState
+			}
+			if err := json.NewDecoder(r.Body).Decode(&result); err != nil || result.Detection != installed {
+				t.Error("unexpected recheck observation")
+			}
+			if rechecks.Add(1) == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}
+		default:
+			t.Errorf("unexpected %s request", action)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	client := trustedClient(t, server)
+	boot, checks := "original", 0
+	exit := uint32(3010)
+	journal := JobJournal{Server: state.Server, DeviceID: state.DeviceID, Job: job, Started: true, Outcome: "reboot_required",
+		ExitCode: &exit, Detection: notInstalled, Reboot: &RebootCheck{
+			Rule: Detection{Kind: "file_exists", Path: `C:\marker.exe`}, Boot: boot, Deadline: time.Now().Add(time.Hour),
+		}}
+	step := func() error {
+		transport := JobTransport{client: client, state: state, journal: journal, log: log.New(io.Discard, "", 0),
+			save: func(next JobJournal) error { journal = next; return nil },
+			execute: func(context.Context, Assignment, Manifest, ExecutionHooks) (ExecutionResult, error) {
+				t.Error("restarted installer")
+				return ExecutionResult{}, nil
+			},
+			detect: func(_ context.Context, rule Detection) DetectionState {
+				checks++
+				if rule.Path != `C:\marker.exe` {
+					t.Error("verification did not use the journaled rule")
+				}
+				return installed
+			}, bootID: func() string { return boot },
+		}
+		return transport.step(context.Background())
+	}
+	if err := step(); err != nil || checks != 0 || journal.Reboot == nil || !journal.Reboot.Reported {
+		t.Fatalf("same boot did not retain pending check: %v", err)
+	}
+	if err := step(); err != nil || checks != 0 {
+		t.Fatalf("service restart triggered a recheck: %v", err)
+	}
+	boot = "after-restart"
+	if err := step(); err == nil || checks != 1 || journal.Reboot.Observation == nil {
+		t.Fatalf("failed transmission did not retain recheck: %v", err)
+	}
+	if err := step(); err != nil || checks != 1 || journal != (JobJournal{}) {
+		t.Fatalf("verification was not replayed and cleared: %v", err)
+	}
+	if initial.Load() != 1 || rechecks.Load() != 2 {
+		t.Fatal("unexpected number of reports")
 	}
 }

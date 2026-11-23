@@ -1,11 +1,11 @@
 import os
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 
 from . import job_schemas as wire
 from .device_api import AgentDevice
@@ -13,6 +13,7 @@ from .device_models import Agent, Device
 from .job_models import DeploymentAttempt as Attempt, DeploymentEvent as Event, DeploymentJob as Job, DeploymentTarget as Target
 from .models import User
 from .package_models import PackageArtifact, PackageDetectionRule, SoftwarePackage, SoftwareVersion, artifact_approved
+from .package_schemas import DetectionState
 from .package_storage import artifact_path
 from .security import PERMISSIONS, Db, Permission, Role, audit, require
 
@@ -20,7 +21,9 @@ router = APIRouter(prefix="/api/v1")
 Reader = Annotated[User, Depends(require(Permission.READ))]
 Operator = Annotated[User, Depends(require(Permission.MANAGE_OPERATIONS))]
 LEASE = timedelta(seconds=120)
-ACTIVE = ("leased", "running", "unknown")
+ACTIVE = ("leased", "running", "awaiting_reboot", "unknown")
+REBOOT_WINDOW = timedelta(hours=24)
+GROUP_KINDS = ("all", "any")
 MAX_ATTEMPTS = 5
 
 
@@ -28,8 +31,16 @@ def execution_enabled() -> bool:
     return os.getenv("DEPLOYCORE_ENABLE_EXECUTION") == "1"
 
 
-def supports_execution(version: str) -> bool:
-    return bool(re.fullmatch(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}", version)) and tuple(map(int, version.split("."))) >= (0, 3, 4)
+def supports_execution(version: str, minimum: tuple[int, int, int] = (0, 3, 4)) -> bool:
+    return bool(re.fullmatch(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}", version)) and tuple(map(int, version.split("."))) >= minimum
+
+
+def agent_capabilities(request: Request) -> set[str]:
+    return {item.strip() for item in request.headers.get("x-deploycore-capabilities", "").split(",")}
+
+
+def detection_capable(request: Request, device: Device) -> bool:
+    return supports_execution(device.agent_version, (0, 3, 5)) and "detection_v1" in agent_capabilities(request)
 
 
 def validate_execution(version, detection, operation):
@@ -41,7 +52,10 @@ def validate_execution(version, detection, operation):
             raise HTTPException(422, "deployment_manifest_invalid")
         return
     if operation == "uninstall" and detection.kind != "msi_product":
-        raise HTTPException(422, "deployment_manifest_invalid")
+        if detection.kind not in GROUP_KINDS or sum(
+            leaf["kind"] == "msi_product" for leaf in detection.data["rules"]
+        ) != 1:
+            raise HTTPException(422, "deployment_manifest_invalid")
     flags = 0
     for arg in args or []:
         if arg.lower() in {"/qn", "/qb"}:
@@ -128,10 +142,14 @@ def create_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) -
         raise HTTPException(503, "package_storage_unavailable")
     if data.operation == "uninstall" and version.uninstall_args is None:
         raise HTTPException(409, "deployment_uninstall_unavailable")
+    minimum_agent = (0, 3, 4)
     if data.mode == "execute_v1":
         if not execution_enabled():
             raise HTTPException(409, "deployment_execution_disabled")
-        validate_execution(version, db.get_one(PackageDetectionRule, data.version_id), data.operation)
+        rule = db.get_one(PackageDetectionRule, data.version_id)
+        validate_execution(version, rule, data.operation)
+        if rule.kind in GROUP_KINDS:
+            minimum_agent = (0, 3, 5)
     devices = list(db.execute(
         select(Device.id, Device.agent_version).join(Agent, Agent.device_id == Device.id)
         .where(Device.id.in_(data.device_ids), Device.deleted_at.is_(None), Agent.revoked_at.is_(None))
@@ -139,7 +157,7 @@ def create_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) -
     if len(devices) != len(data.device_ids):
         raise HTTPException(422, "deployment_devices_unavailable")
 
-    if data.mode == "execute_v1" and not all(supports_execution(agent_version) for _, agent_version in devices):
+    if data.mode == "execute_v1" and not all(supports_execution(agent_version, minimum_agent) for _, agent_version in devices):
         raise HTTPException(422, "deployment_agent_incompatible")
 
     job = Job(version_id=data.version_id, artifact_sha256=artifact.sha256, operation=data.operation,
@@ -181,16 +199,23 @@ def job_detail(job_id: UUID, db: Db, actor: Reader) -> wire.JobDetail:
               .limit(1).correlate(Target).lateral())
     rows = db.execute(
         select(Target, Device.hostname, latest.c.number, latest.c.lease_expires_at,
-               latest.c.stage, latest.c.exit_code, latest.c.diagnostic, latest.c.output_bytes).select_from(Target)
+               latest.c.stage, latest.c.exit_code, latest.c.diagnostic, latest.c.output_bytes,
+               latest.c.started_at, latest.c.process_started, latest.c.detection, latest.c.reboot_deadline, latest.c.reboot_detection,
+               latest.c.reboot_finished_at).select_from(Target)
         .join(Device, Device.id == Target.device_id).outerjoin(latest, text("true"))
         .where(Target.job_id == job_id).order_by(Device.hostname, Device.id)
     )
     targets = [wire.TargetView(
         id=target.id, device_id=target.device_id, hostname=name, state=target.state,
-        cancel_requested=target.cancel_requested, attempt=number, lease_expires_at=expires if target.state in ACTIVE else None,
-        recovery_required=target.state == "unknown" or (target.state == "running" and expires is not None and expires <= now),
+        cancel_requested=target.cancel_requested, attempt=number, lease_expires_at=expires if target.state in ("leased", "running", "unknown") else None,
+        recovery_required=target.state == "unknown" or (target.state == "running" and expires is not None and expires <= now)
+        or (target.state == "awaiting_reboot" and deadline is not None and deadline <= now),
         stage=stage, exit_code=code, diagnostic=diagnostic, output_bytes=output,
-    ) for target, name, number, expires, stage, code, diagnostic, output in rows]
+        started_at=started, process_started=launched, detection=observation, reboot_deadline=deadline, reboot_detection=reboot_observation,
+        reboot_finished_at=reboot_finished,
+        reboot_diagnostic=reboot_diagnostic(target.state, reboot_observation, reboot_finished),
+    ) for target, name, number, expires, stage, code, diagnostic, output, started, launched, observation, deadline,
+          reboot_observation, reboot_finished in rows]
     db.commit()
     return wire.JobDetail(**summary.model_dump(), targets=targets)
 
@@ -243,17 +268,27 @@ def assignment(db: Db, target: Target, attempt: Attempt) -> wire.PollReply:
 
 @router.post("/agent/{device_id}/jobs/poll", tags=["Agent Jobs"])
 def poll(request: Request, db: Db, device: AgentDevice) -> wire.PollReply:
-    execute = execution_enabled() and supports_execution(device.agent_version) and request.headers.get("x-deploycore-capabilities") == "execute_v1"
+    execute = execution_enabled() and supports_execution(device.agent_version) and "execute_v1" in agent_capabilities(request)
+    extended = detection_capable(request, device)
     # require_agent serializes requests for this device. The unique partial index is a second line of defense.
     active = db.scalar(select(Target).where(Target.device_id == device.id, Target.state.in_(ACTIVE)).with_for_update())
     if active is not None:
         attempt = last_attempt(db, active.id)
+        if active.state == "awaiting_reboot":
+            now = clock(db)
+            if attempt.reboot_deadline <= now:
+                finish_reboot(db, active, attempt, None, now)
+            db.commit()
+            return wire.PollReply(recovery_required=True)
         if active.state in ("running", "unknown"):
             db.commit()
             return wire.PollReply(recovery_required=True)
         now = clock(db)
         if attempt.lease_expires_at > now:
-            if db.get_one(Job, active.job_id).mode == "execute_v1" and not execute:
+            job = db.get_one(Job, active.job_id)
+            if job.mode == "execute_v1" and (
+                not execute or (not extended and db.get_one(PackageDetectionRule, job.version_id).kind in GROUP_KINDS)
+            ):
                 db.commit()
                 return wire.PollReply()
             reply = assignment(db, active, attempt)
@@ -266,6 +301,8 @@ def poll(request: Request, db: Db, device: AgentDevice) -> wire.PollReply:
     target = db.scalar(
         select(Target).join(Job, Job.id == Target.job_id)
         .where(Target.device_id == device.id, Target.state == "queued", Job.mode.in_(("transport_only", "execute_v1") if execute else ("transport_only",)))
+        .join(PackageDetectionRule, PackageDetectionRule.version_id == Job.version_id)
+        .where(or_(Job.mode == "transport_only", PackageDetectionRule.kind.not_in(GROUP_KINDS)) if not extended else True)
         .order_by(Job.created_at, Job.id).limit(1).with_for_update(of=Target)
     )
     if target is None:
@@ -335,29 +372,91 @@ def heartbeat(target_id: UUID, data: wire.Heartbeat, db: Db, device: AgentDevice
 
 
 @router.post("/agent/{device_id}/jobs/{target_id}/result", tags=["Agent Jobs"], response_model_exclude_none=True)
-def submit_result(target_id: UUID, data: wire.Result, db: Db, device: AgentDevice) -> wire.Result:
+def submit_result(target_id: UUID, data: wire.Result, request: Request, db: Db, device: AgentDevice) -> wire.Result:
     target, attempt = attempt_for(db, device, target_id, data.attempt_id)
     mode = db.get_one(Job, target.job_id).mode
-    proposed = (data.outcome, data.exit_code, data.diagnostic, data.output_bytes)
-    if (mode == "transport_only" and (data.outcome not in ("not_executed", "cancelled") or any(x is not None for x in proposed[1:]))) or (
-        mode == "execute_v1" and data.outcome == "not_executed"
-    ):
+    extended = data.detection is not None or data.reboot_pending or data.process_started is not None
+    if extended and not detection_capable(request, device):
+        raise HTTPException(409, "deployment_agent_incompatible")
+    if data.reboot_pending and (data.outcome != "reboot_required" or data.process_started is not True):
+        raise HTTPException(422, "deployment_result_conflict")
+    execution_details = (data.exit_code, data.diagnostic, data.output_bytes, data.detection, data.process_started)
+    invalid_transport = mode == "transport_only" and (
+        data.outcome not in ("not_executed", "cancelled") or extended or any(x is not None for x in execution_details)
+    )
+    if invalid_transport or (mode == "execute_v1" and data.outcome == "not_executed"):
         raise HTTPException(422, "deployment_mode_conflict")
     if attempt.finished_at is not None:
-        if attempt.diagnostic != "operator_resolved" and (attempt.acknowledged_at is None or proposed != (attempt.outcome, attempt.exit_code, attempt.diagnostic, attempt.output_bytes)):
+        stored = (attempt.exit_code, attempt.diagnostic, attempt.output_bytes, attempt.detection, attempt.process_started)
+        same_result = (data.outcome == attempt.outcome and execution_details == stored
+                       and bool(data.reboot_pending) == (attempt.reboot_deadline is not None))
+        if attempt.diagnostic != "operator_resolved" and (attempt.acknowledged_at is None or not same_result):
             raise HTTPException(409, "deployment_result_conflict")
     else:
         if attempt.acknowledged_at is None or target.state != "running":
             raise HTTPException(409, "deployment_lease_conflict")
         if data.outcome == "cancelled" and not target.cancel_requested:
             raise HTTPException(409, "deployment_cancel_not_requested")
+        if data.process_started is not None and attempt.started_at is None:
+            raise HTTPException(409, "deployment_start_required")
+        if data.process_started is False and data.exit_code is not None:
+            raise HTTPException(422, "deployment_result_conflict")
         if data.outcome in ("succeeded", "reboot_required") and (attempt.started_at is None or data.exit_code is None):
             raise HTTPException(409, "deployment_start_required")
         if data.outcome in ("already_installed", "already_absent") and attempt.started_at is not None:
             raise HTTPException(409, "deployment_already_started")
-        attempt.outcome, attempt.exit_code, attempt.diagnostic, attempt.output_bytes = proposed
+        attempt.outcome = data.outcome
+        (attempt.exit_code, attempt.diagnostic, attempt.output_bytes,
+         attempt.detection, attempt.process_started) = execution_details
+        if data.detection is not None and attempt.started_at is not None and attempt.stage != "verifying":
+            attempt.stage = "verifying"
+            event(db, target.job_id, "verifying", target, attempt)
         attempt.finished_at = clock(db)
         target.state = data.outcome
-        event(db, target.job_id, data.outcome, target, attempt)
+        if data.reboot_pending:
+            attempt.reboot_deadline = attempt.finished_at + REBOOT_WINDOW
+            target.state = "awaiting_reboot"
+        event(db, target.job_id, target.state, target, attempt)
     db.commit()
     return data
+
+
+def reboot_diagnostic(state: str, observation: DetectionState | None,
+                      finished: datetime | None) -> wire.Diagnostic | None:
+    if finished is None:
+        return None
+    if observation is None:
+        return "reboot_timeout"
+    if observation == "unknown":
+        return "detection_failed"
+    return "detection_mismatch" if state == "failed" else None
+
+
+def finish_reboot(db: Db, target: Target, attempt: Attempt, observation: DetectionState | None, now: datetime):
+    attempt.reboot_detection = observation
+    attempt.reboot_finished_at = now
+    job = db.get_one(Job, target.job_id)
+    desired = "installed" if job.operation == "install" else "not_installed"
+    if observation in (None, "unknown"):
+        target.state = "unknown"
+    else:
+        target.state = "succeeded" if observation == desired else "failed"
+    event(db, target.job_id, reboot_diagnostic(target.state, observation, now) or "reboot_verified", target, attempt)
+
+
+@router.post("/agent/{device_id}/jobs/{target_id}/reboot-result", tags=["Agent Jobs"], status_code=204)
+def submit_reboot_result(target_id: UUID, data: wire.RebootResult, request: Request, db: Db, device: AgentDevice):
+    if not detection_capable(request, device):
+        raise HTTPException(409, "deployment_agent_incompatible")
+    target, attempt = attempt_for(db, device, target_id, data.attempt_id)
+    if attempt.reboot_deadline is None:
+        raise HTTPException(409, "deployment_result_conflict")
+    if attempt.reboot_finished_at is not None:
+        if attempt.reboot_detection is not None and attempt.reboot_detection != data.detection:
+            raise HTTPException(409, "deployment_result_conflict")
+    elif target.state == "awaiting_reboot":
+        now = clock(db)
+        finish_reboot(db, target, attempt, data.detection if now < attempt.reboot_deadline else None, now)
+    else:
+        raise HTTPException(409, "deployment_result_conflict")
+    db.commit()

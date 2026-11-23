@@ -56,7 +56,18 @@ class FileVersion(Wire):
     version: Annotated[str, StringConstraints(pattern=r"^[0-9]{1,5}(\.[0-9]{1,5}){3}$")]
 
 
-Detection = Annotated[MSIProduct | RegistrySoftware | FileExists | FileVersion, Field(discriminator="kind")]
+DetectionLeaf = Annotated[MSIProduct | RegistrySoftware | FileExists | FileVersion, Field(discriminator="kind")]
+
+
+class DetectionGroup(Wire):
+    kind: Literal["all", "any"]
+    schema_version: Literal[1] = 1
+    rules: Annotated[list[DetectionLeaf], Field(min_length=2, max_length=8)]
+
+
+Detection = Annotated[MSIProduct | RegistrySoftware | FileExists | FileVersion | DetectionGroup, Field(discriminator="kind")]
+DetectionState = Literal["installed", "not_installed", "unknown"]
+
 
 
 class VersionInput(Wire):

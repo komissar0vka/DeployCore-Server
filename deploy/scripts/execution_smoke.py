@@ -6,29 +6,29 @@ from urllib.error import HTTPError
 from urllib.request import HTTPSHandler, ProxyHandler, Request, build_opener
 
 
-def exercise_execution(check, login, sql, base, context, version_id, admin):
+def exercise_execution(check, login, sql, base, context, version_id, composite_id, group, admin):
     operator_cookie, csrf, _ = login("operator")
     operator = {"cookie": operator_cookie, "csrf": csrf}
     viewer_cookie, vc, _ = login("viewer")
     viewer = {"cookie": viewer_cookie, "csrf": vc}
-    devices = [str(uuid.uuid4()) for _ in range(3)]
+    devices = [str(uuid.uuid4()) for _ in range(4)]
     credentials = [secrets.token_urlsafe(32) for _ in devices]
-    token = check("/enrollment-tokens", {201}, method="POST", data={"label": "Execution smoke", "max_uses": 3}, **operator)[1]["token"]
+    token = check("/enrollment-tokens", {201}, method="POST", data={"label": "Execution smoke", "max_uses": 4}, **operator)[1]["token"]
     for i, device in enumerate(devices):
         check("/agent/enroll", {200}, method="POST", origin=None, data={
             "installation_id": device, "enrollment_token": token, "credential": credentials[i],
             "heartbeat": {"hostname": f"EXEC-{i+1}", "ips": [], "domain_joined": False, "os_version": "Windows",
-                          "agent_version": "0.3.3" if i == 2 else "0.3.4", "uptime_seconds": 60},
+                          "agent_version": ("0.3.4", "0.3.4", "0.3.3", "0.3.5")[i], "uptime_seconds": 60},
         })
 
-    def agent(i, path, method="POST", expected=200, data=None, capable=True):
+    def agent(i, path, method="POST", expected=200, data=None, capable=True, extended=True):
         headers = {"Authorization": f"Bearer {credentials[i]}"}
         if capable:
-            headers["X-DeployCore-Capabilities"] = "execute_v1"
+            headers["X-DeployCore-Capabilities"] = "execute_v1, detection_v1" if i == 3 and extended else "execute_v1"
         return check(f"/agent/{devices[i]}/jobs/{path}", {expected}, method=method, origin=None, extra=headers, data=data)[1]
 
-    def job_payload(device, operation="install"):
-        return {"version_id": version_id, "device_ids": [device], "operation": operation,
+    def job_payload(device, operation="install", version=version_id):
+        return {"version_id": version, "device_ids": [device], "operation": operation,
                 "mode": "execute_v1", "request_id": str(uuid.uuid4())}
 
     def fetch(i, target, attempt, expected, *, headers=None):
@@ -105,3 +105,74 @@ def exercise_execution(check, login, sql, base, context, version_id, admin):
     agent(1, next_lease["target_id"] + "/start", data={"attempt_id": next_lease["attempt_id"]}, expected=401)
     assert removed["operation"] == "uninstall"
     print("Execution API: scoped TLS download, Range, old agents, RBAC, start fence, recovery, retry and revocation passed")
+
+
+    def preview_agent(i, suffix, expected=200, data=None, extended=True):
+        headers = {"Authorization": f"Bearer {credentials[i]}"}
+        if extended:
+            headers["X-DeployCore-Capabilities"] = "execute_v1, detection_v1"
+        return check(f"/agent/{devices[i]}/detection-previews/{suffix}", {expected},
+                     method="POST", data=data, origin=None, extra=headers)[1]
+
+    preview_input = {"device_id": devices[3], "version_id": composite_id}
+    check("/detection-previews", {403}, method="POST", data=preview_input, **viewer)
+    check("/detection-previews", {403}, method="POST", data=preview_input, cookie=operator_cookie)
+    check("/detection-previews", {409}, method="POST", data={**preview_input, "device_id": devices[0]}, **operator)
+    preview = check("/detection-previews", {201}, method="POST", data=preview_input, **operator)[1]
+    assert preview["status"] == "queued"
+    check("/detection-previews", {429}, method="POST", data=preview_input, **operator)
+    preview_path = f'/detection-previews/{preview["id"]}'
+    check(preview_path, {403}, **viewer)
+    preview_agent(3, "poll", 409, extended=False)
+    preview_agent(0, "poll", 409)
+    preview_agent(3, f'{preview["id"]}/result', 409, {"observation": "installed"})
+    assert preview_agent(3, "poll") == {"task": {"id": preview["id"], "rule": group}}
+    assert preview_agent(3, "poll")["task"] is None
+    preview_agent(3, f'{preview["id"]}/result', 204, {"observation": "unknown"})
+    preview_agent(3, f'{preview["id"]}/result', 204, {"observation": "unknown"})
+    preview_agent(3, f'{preview["id"]}/result', 409, {"observation": "installed"})
+    assert check(preview_path, {200}, **operator)[1]["observation"] == "unknown"
+
+    check("/deployments", {422}, method="POST", data=job_payload(devices[0], version=composite_id), **operator)
+    reboot_job = check("/deployments", {201}, method="POST", data=job_payload(devices[3], version=composite_id), **operator)[1]
+    assert agent(3, "poll", extended=False)["assignment"] is None
+    reboot_lease = agent(3, "poll")["assignment"]
+    target, attempt = reboot_lease["target_id"], reboot_lease["attempt_id"]
+    proof = {"attempt_id": attempt}
+    agent(3, f"{target}/ack", data=proof)
+    assert agent(3, f"{target}/manifest?attempt_id={attempt}", method="GET")["detection"] == group
+    agent(3, f"{target}/manifest?attempt_id={attempt}", method="GET", expected=409, extended=False)
+    agent(3, f"{target}/start", data=proof, expected=409, extended=False)
+    agent(3, f"{target}/start", data=proof)
+    pending = {**proof, "outcome": "reboot_required", "exit_code": 3010,
+               "process_started": True, "reboot_pending": True}
+    assert agent(3, f"{target}/result", data=pending) == pending
+    detail = check(f'/deployments/{reboot_job["id"]}', {200}, **viewer)[1]
+    assert detail["counts"] == {"awaiting_reboot": 1}
+    assert detail["targets"][0]["process_started"] is True
+    assert agent(3, "poll")["recovery_required"]
+    assert agent(3, f"{target}/result", data=pending) == pending
+    agent(3, f"{target}/start", expected=409, data=proof)
+    reboot_result = {**proof, "detection": "installed"}
+    for _ in range(2):
+        agent(3, f"{target}/reboot-result", expected=204, data=reboot_result)
+    assert agent(3, f"{target}/result", data=pending) == pending
+    detail = check(f'/deployments/{reboot_job["id"]}', {200}, **viewer)[1]
+    assert detail["counts"] == {"succeeded": 1}
+    assert detail["targets"][0]["exit_code"] == 3010
+    assert detail["targets"][0]["detection"] is None
+    assert detail["targets"][0]["reboot_detection"] == "installed"
+    expired_job = check("/deployments", {201}, method="POST", data=job_payload(devices[3]), **operator)[1]
+    expired = agent(3, "poll")["assignment"]
+    target, attempt = expired["target_id"], expired["attempt_id"]
+    proof = {"attempt_id": attempt}
+    agent(3, f"{target}/ack", data=proof)
+    agent(3, f"{target}/start", data=proof)
+    agent(3, f"{target}/result", data={**pending, **proof})
+    sql(f"UPDATE deployment_attempts SET reboot_deadline=clock_timestamp()-interval '1 second' WHERE id='{attempt}';")
+    assert agent(3, "poll")["recovery_required"]
+    agent(3, f"{target}/reboot-result", expected=204, data={**proof, "detection": "installed"})
+    expired_view = check(f'/deployments/{expired_job["id"]}', {200}, **viewer)[1]
+    assert expired_view["counts"] == {"unknown": 1}
+    assert expired_view["targets"][0]["reboot_diagnostic"] == "reboot_timeout"
+    print("Detection API: preview RBAC, CSRF, rate limit, scoped capability, composite lease and idempotent reboot result passed")

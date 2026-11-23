@@ -5,13 +5,15 @@ import type { DeploymentPreset } from './deployments'
 import { api, type Session } from './api'
 import { Dialog } from './components/ui/dialog'
 import { ConfirmDialog, EmptyState, LoadingSkeleton, SectionTitle, StatusBadge } from './design'
-import { Action, Field, FormError, Panel, errorMessage, type Translate } from './ui'
+import { Action, Field, FormError, Panel, detectionLabel, errorMessage, type Translate } from './ui'
 
 interface ProductFields { name: string; publisher: string; description: string }
 interface Product extends ProductFields { id: string }
 interface Artifact { filename: string; size_bytes: number; sha256: string; signature: 'verified' | 'unverified' }
-type Detection = { kind: 'msi_product'; product_code: string } | { kind: 'registry_software'; display_name: string; version: string }
+type DetectionLeaf = { kind: 'msi_product'; product_code: string } | { kind: 'registry_software'; display_name: string; version: string }
   | { kind: 'file_exists'; path: string } | { kind: 'file_version'; path: string; version: string }
+type Detection = DetectionLeaf | { kind: 'all'; schema_version: 1; rules: DetectionLeaf[] }
+  | { kind: 'any'; schema_version: 1; rules: DetectionLeaf[] }
 interface VersionInput {
   version: string
   architecture: 'x64' | 'x86'
@@ -50,10 +52,54 @@ function ProductDialog({ product, close, save, pending, error, t }: {
   </Dialog>
 }
 
+function readLeaf(read: (name: string) => string, index: number): DetectionLeaf {
+  const kind = read(`ruleKind${index}`)
+  const version = read(`detectedVersion${index}`)
+  const path = read(`filePath${index}`)
+  switch (kind) {
+    case 'msi_product': return { kind, product_code: read(`productCode${index}`) }
+    case 'registry_software': return { kind, display_name: read(`display${index}`), version }
+    case 'file_version': return { kind, path, version }
+    default: return { kind: 'file_exists', path }
+  }
+}
+
+function DetectionFields({ index, t }: { index: number; t: Translate }) {
+  const [kind, setKind] = useState<DetectionLeaf['kind']>('registry_software')
+  return <fieldset className="grid gap-3 rounded border border-border p-3">
+    <label className="grid gap-2 text-sm">{t('Тип правила', 'Rule type')}
+      <select className="input" name={`ruleKind${index}`} value={kind} onChange={event => setKind(event.target.value as DetectionLeaf['kind'])}>
+        <option value="registry_software">{t('Имя и версия в реестре', 'Registry name and version')}</option>
+        <option value="msi_product">MSI ProductCode</option>
+        <option value="file_exists">{t('Наличие файла', 'File exists')}</option>
+        <option value="file_version">{t('Версия файла', 'File version')}</option>
+      </select>
+    </label>
+    {kind === 'msi_product' && <Field name={`productCode${index}`} label="MSI ProductCode" required maxLength={38} />}
+    {kind === 'registry_software' && <Field name={`display${index}`} label={t('Имя в реестре', 'Registry display name')} required maxLength={160} />}
+    {(kind === 'file_exists' || kind === 'file_version') && <Field name={`filePath${index}`} label={t('Абсолютный путь к файлу', 'Absolute file path')} required maxLength={240} />}
+    {(kind === 'registry_software' || kind === 'file_version') && <Field key={kind} name={`detectedVersion${index}`}
+      label={kind === 'file_version' ? t('Версия файла', 'File version') : t('Версия в реестре', 'Registry version')} required maxLength={120} />}
+  </fieldset>
+}
+
+function describeRule(rule: Detection, t: Translate): string {
+  switch (rule.kind) {
+    case 'all':
+    case 'any':
+      return `${rule.kind === 'all' ? t('Все правила', 'All rules') : t('Любое правило', 'Any rule')} (${rule.rules.map(child => describeRule(child, t)).join(' · ')})`
+    case 'msi_product': return rule.product_code
+    case 'registry_software': return `${rule.display_name} (${rule.version})`
+    case 'file_version': return `${rule.path} (${rule.version})`
+    case 'file_exists': return rule.path
+  }
+}
+
 function VersionDialog({ t, close, save, pending, error }: {
   t: Translate; close: () => void; save: (body: VersionInput) => void; pending: boolean; error: unknown
 }) {
-  const [detection, setDetection] = useState<Detection['kind']>('registry_software')
+  const [group, setGroup] = useState<'single' | 'all' | 'any'>('single')
+  const [ruleCount, setRuleCount] = useState(2)
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const fields = new FormData(event.currentTarget)
@@ -66,10 +112,9 @@ function VersionDialog({ t, close, save, pending, error }: {
       install_args: lines('install'), uninstall_args: fields.get('remove') ? lines('uninstall') : null,
       timeout_seconds: Number(read('timeout')), success_codes: read('codes').split(',').map(value => Number(value.trim())),
       reboot_required: fields.has('reboot'),
-      detection: detection === 'msi_product' ? { kind: detection, product_code: read('productCode') }
-        : detection === 'registry_software' ? { kind: detection, display_name: read('display'), version: read('detectedVersion') }
-        : detection === 'file_version' ? { kind: detection, path: read('filePath'), version: read('detectedVersion') }
-        : { kind: detection, path: read('filePath') },
+      detection: group === 'single' ? readLeaf(read, 0) : {
+        kind: group, schema_version: 1, rules: Array.from({ length: ruleCount }, (_, index) => readLeaf(read, index)),
+      },
     })
   }
   return <Dialog title={t('Новая версия', 'New version')} close={close} closeLabel={t('Закрыть', 'Close')}>
@@ -94,21 +139,17 @@ function VersionDialog({ t, close, save, pending, error }: {
       <label className="text-sm"><input name="remove" type="checkbox" /> {t('Разрешить удаление', 'Allow removal')}</label>
       <label className="text-sm"><input name="reboot" type="checkbox" /> {t('Требуется перезагрузка', 'Restart required')}</label>
       <label className="grid gap-2 text-sm">{t('Правило обнаружения', 'Detection rule')}
-        <select className="input" aria-label={t('Правило обнаружения', 'Detection rule')} value={detection} onChange={event => setDetection(event.target.value as Detection['kind'])}>
-          <option value="registry_software">{t('Имя и версия в реестре', 'Registry name and version')}</option>
-          <option value="msi_product">MSI ProductCode</option>
-          <option value="file_exists">{t('Наличие файла', 'File exists')}</option>
-          <option value="file_version">{t('Версия файла', 'File version')}</option>
+        <select className="input" value={group} onChange={event => setGroup(event.target.value as typeof group)}>
+          <option value="single">{t('Одно правило', 'Single rule')}</option>
+          <option value="all">{t('Все правила', 'All rules')}</option>
+          <option value="any">{t('Любое правило', 'Any rule')}</option>
         </select>
       </label>
-      {detection === 'msi_product' ? <Field name="productCode" label="MSI ProductCode" required maxLength={38} />
-        : detection === 'registry_software' ? <div className="grid gap-3 sm:grid-cols-2">
-          <Field name="display" label={t('Имя в реестре', 'Registry display name')} required maxLength={160} />
-          <Field name="detectedVersion" label={t('Версия в реестре', 'Registry version')} required maxLength={120} />
-        </div> : <div className="grid gap-3">
-          <Field name="filePath" label={t('Абсолютный путь к файлу', 'Absolute file path')} required maxLength={240} />
-          {detection === 'file_version' && <Field name="detectedVersion" label={t('Версия файла', 'File version')} required placeholder="1.0.0.0" />}
-        </div>}
+      {Array.from({ length: group === 'single' ? 1 : ruleCount }, (_, index) => <DetectionFields key={index} index={index} t={t} />)}
+      {group !== 'single' && <div className="flex flex-wrap gap-2">
+        <Action type="button" secondary disabled={ruleCount >= 8} onClick={() => setRuleCount(ruleCount + 1)}>{t('Добавить правило', 'Add rule')}</Action>
+        <Action type="button" secondary disabled={ruleCount <= 2} onClick={() => setRuleCount(ruleCount - 1)}>{t('Удалить последнее правило', 'Remove last rule')}</Action>
+      </div>}
       <FormError message={error ? errorMessage(error, t) : null} />
       <Action type="submit" disabled={pending}>{t('Добавить версию', 'Add version')}</Action>
     </form>
@@ -175,11 +216,58 @@ function ManualApprovalDialog({ artifact, close, save, pending, error, t }: {
   </Dialog>
 }
 
+interface Preview { id: string; status: 'queued' | 'checking' | 'completed' | 'expired'; observation: string | null }
+
+function DetectionPreviewDialog({ version, csrf, close, t }: { version: string; csrf: string; close: () => void; t: Translate }) {
+  const [search, setSearch] = useState('')
+  const [device, setDevice] = useState('')
+  const devices = useQuery({
+    queryKey: ['preview-devices', search],
+    queryFn: () => api<{ items: { id: string; hostname: string; agent_revoked: boolean; agent_version: string }[] }>(
+      `/devices?${new URLSearchParams({ q: search, limit: '25' })}`),
+  })
+  const start = useMutation({
+    mutationFn: () => api<Preview>('/detection-previews', { method: 'POST', csrf, body: { version_id: version, device_id: device } }),
+  })
+  const result = useQuery({
+    queryKey: ['detection-preview', start.data?.id], enabled: !!start.data,
+    queryFn: () => api<Preview>(`/detection-previews/${start.data?.id}`),
+    refetchInterval: query => query.state.data?.status === 'completed' || query.state.data?.status === 'expired' ? false : 2000,
+  })
+  const status = (result.data ?? start.data)?.status
+  const observation = result.data?.observation
+  const error = devices.error || start.error || result.error
+  return <Dialog title={t('Проверить обнаружение', 'Preview detection')} close={close} closeLabel={t('Закрыть', 'Close')}>
+    <form className="grid gap-3" onSubmit={event => { event.preventDefault(); if (device && !start.data && !start.isPending) start.mutate() }}>
+      <p className="text-sm">{t('Выберите тестовое устройство с Agent 0.3.5 или новее. Агент проверит только правило обнаружения.',
+        'Select a test device running Agent 0.3.5 or later. The agent checks the detection rule only.')}</p>
+      <Field name="deviceSearch" label={t('Поиск устройства', 'Find device')} value={search} maxLength={120} disabled={!!status || start.isPending}
+        onChange={event => { setSearch(event.target.value); setDevice('') }} />
+      <label className="grid gap-2 text-sm">{t('Тестовое устройство', 'Test device')}
+        <select className="input" required value={device} disabled={!!status || start.isPending} onChange={event => setDevice(event.target.value)}>
+          <option value="">{t('Выберите устройство', 'Select device')}</option>
+          {devices.data?.items.filter(item => !item.agent_revoked).map(item =>
+            <option key={item.id} value={item.id}>{item.hostname} · {item.agent_version}</option>)}
+        </select>
+      </label>
+      <FormError message={error ? errorMessage(error, t) : null} />
+      {status && <p role="status" className="text-sm">
+        {observation ? detectionLabel(observation, t) : {
+          queued: t('Ожидает агента', 'Waiting for agent'), checking: t('Агент проверяет правило', 'Agent is checking'),
+          expired: t('Время проверки истекло', 'Preview expired'), completed: '',
+        }[status]}
+      </p>}
+      <Action type="submit" disabled={!device || start.isPending || !!status}>{t('Запустить проверку', 'Run preview')}</Action>
+    </form>
+  </Dialog>
+}
+
 function ProductDetails({ id, back, session, t, deploy }: Props & { id: string; back: () => void; deploy: (preset: DeploymentPreset) => void }) {
   const client = useQueryClient()
   const path = '/packages/' + id
   const query = useQuery({ queryKey: ['package', id], queryFn: () => api<Product & { versions: Version[] }>(path) })
   const [modal, setModal] = useState<'edit' | 'version' | 'archive' | null>(null)
+  const [preview, setPreview] = useState<string | null>(null)
   const [manual, setManual] = useState<{ version: string; artifact: Artifact } | null>(null)
   const writable = session.user.role !== 'viewer'
   const csrf = session.csrf_token
@@ -229,12 +317,11 @@ function ProductDetails({ id, back, session, t, deploy }: Props & { id: string; 
                 <dt>{t('Минимальная сборка Windows', 'Minimum Windows build')}</dt><dd>{version.min_windows_build ?? '—'}</dd>
                 <dt>{t('Таймаут и коды завершения', 'Timeout and exit codes')}</dt><dd>{version.timeout_seconds} s · {version.success_codes.join(', ')}</dd>
                 <dt>{t('Перезагрузка', 'Restart')}</dt><dd>{version.reboot_required ? t('Требуется', 'Required') : t('По результату', 'Based on result')}</dd>
-                <dt>{t('Обнаружение', 'Detection')}</dt><dd className="break-all">{version.detection.kind === 'msi_product'
-                  ? version.detection.product_code : version.detection.kind === 'registry_software' ? `${version.detection.display_name} · ${version.detection.version}`
-                  : version.detection.kind === 'file_version' ? `${version.detection.path} · ${version.detection.version}` : version.detection.path}</dd>
+                <dt>{t('Обнаружение', 'Detection')}</dt><dd className="break-all">{describeRule(version.detection, t)}</dd>
                 <dt>{t('Аргументы установки', 'Installation arguments')}</dt><dd className="break-all font-mono">{JSON.stringify(version.install_args)}</dd>
                 <dt>{t('Аргументы удаления', 'Removal arguments')}</dt><dd className="break-all font-mono">{version.uninstall_args === null ? '—' : JSON.stringify(version.uninstall_args)}</dd>
               </dl>
+              {writable && <div><Action secondary onClick={() => setPreview(version.id)}>{t('Проверить обнаружение', 'Preview detection')}</Action></div>}
               {version.artifact ? <div className="grid gap-2 text-sm">
                 <span className="break-all">{version.artifact.filename} · {(version.artifact.size_bytes / 1048576).toFixed(2)} MiB</span>
                 <code className="break-all text-xs">SHA-256 {version.artifact.sha256}</code>
@@ -263,6 +350,7 @@ function ProductDetails({ id, back, session, t, deploy }: Props & { id: string; 
         })}
       </div>
     </Panel>}
+    {preview && <DetectionPreviewDialog version={preview} csrf={csrf} t={t} close={() => setPreview(null)} />}
     {manual && <ManualApprovalDialog artifact={manual.artifact} t={t} close={() => setManual(null)}
       save={sha256 => manualApproval.mutate({ version: manual.version, sha256 })}
       pending={manualApproval.isPending} error={manualApproval.error} />}

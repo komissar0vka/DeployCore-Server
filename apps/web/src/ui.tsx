@@ -35,12 +35,13 @@ export function errorMessage(error: unknown, t: Translate) {
     deployment_version_unavailable: t('Для задания выберите утверждённую версию с установщиком.', 'Select an approved version with an installer.'),
     deployment_uninstall_unavailable: t('Для этой версии удаление не разрешено.', 'Removal is unavailable for this version.'),
     deployment_execution_disabled: t('Запуск программ отключён политикой сервера.', 'Program execution is disabled by server policy.'),
-    deployment_agent_incompatible: t('Для выбранных устройств нужен Agent 0.3.4 или новее.', 'Selected devices require Agent 0.3.4 or later.'),
+    deployment_agent_incompatible: t('Версия агента не поддерживает эту операцию.', 'The agent version does not support this operation.'),
+    detection_preview_rate_limit: t('Лимит проверок достигнут. Повторите через две минуты.', 'Preview limit reached. Try again in two minutes.'),
     deployment_manifest_invalid: t('Манифест содержит неподдерживаемые параметры для этой операции.', 'The manifest contains unsupported options for this operation.'),
     deployment_request_conflict: t('Состав задания изменился. Создайте новое задание.', 'The submission changed. Create a new job.'),
     csrf_invalid: t('Проверка запроса не пройдена. Обновите страницу.', 'Request verification failed. Reload the page.'),
   }
-  if (error.status === 422) return t('Проверьте формат и допустимые значения полей.', 'Check field formats and allowed values.')
+  if (error.status === 422 && !messages[error.code]) return t('Проверьте формат и допустимые значения полей.', 'Check field formats and allowed values.')
   return messages[error.code] ?? t('Не удалось выполнить запрос.', 'The request could not be completed.')
 }
 
@@ -66,4 +67,12 @@ export function Action({ secondary, className, ...props }: ButtonHTMLAttributes<
 
 export function FormError({ message }: { message?: string | null }) {
   return message && <p role="alert" className="rounded-lg border border-danger-line bg-danger-soft p-3 text-sm text-danger">{message}</p>
+}
+
+export function detectionLabel(state: string, t: Translate) {
+  switch (state) {
+    case 'installed': return t('ПО обнаружено', 'Software detected')
+    case 'not_installed': return t('ПО отсутствует', 'Software absent')
+    default: return t('Обнаружение не дало результата', 'Detection inconclusive')
+  }
 }

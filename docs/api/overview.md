@@ -55,3 +55,19 @@ Super Admin может утвердить загруженный MSI/EXE с не
 ## Исполнение программ
 
 [Контракт execute_v1, маршруты артефакта и старта, повтор и ручное разрешение](../releases/0.5.0-stage-c.md#протокол-и-безопасность).
+
+### Обнаружение и проверка после перезагрузки
+
+Одиночные правила сохраняют формат. Группа содержит `kind: all|any`, `schema_version: 1` и от 2 до 8 одиночных правил в `rules`. Группы и новые машинные запросы требуют Agent 0.3.5+ и заголовка `X-DeployCore-Capabilities: execute_v1, detection_v1`.
+
+| Маршрут относительно `/api/v1` | Операция |
+| --- | --- |
+| `POST /detection-previews` | Создать предпросмотр для `device_id` и `version_id` |
+| `GET /detection-previews/{preview_id}` | Прочитать собственный запрос. Super Admin может читать все запросы |
+| `POST /agent/{device_id}/detection-previews/poll` | Получить одно правило для текущего устройства |
+| `POST /agent/{device_id}/detection-previews/{preview_id}/result` | Вернуть `observation` |
+| `POST /agent/{device_id}/jobs/{target_id}/reboot-result` | Передать `attempt_id` и `detection`. Значение `null` сообщает об истечении локального срока |
+
+Для предпросмотра требуется Administrator или Super Admin, при создании действует защита CSRF. Запрос активен две минуты. За это окно разрешён один запрос на устройство и до пяти на оператора. Машинные маршруты используют Bearer-ключ соответствующего устройства.
+
+В `jobs/.../result` Agent 0.3.5 может передать `detection`, `process_started` и `reboot_pending: true`. В последнем случае состояние цели становится `awaiting_reboot`. Завершающая проверка дополняет текущую попытку полями `reboot_detection` и `reboot_finished_at`. Код исходного процесса сохраняется.

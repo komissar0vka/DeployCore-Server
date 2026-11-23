@@ -2153,6 +2153,67 @@
         }
       }
     },
+    "/api/v1/agent/{device_id}/jobs/{target_id}/reboot-result": {
+      "post": {
+        "tags": [
+          "Agent Jobs"
+        ],
+        "summary": "Submit Reboot Result",
+        "operationId": "submit_reboot_result_api_v1_agent__device_id__jobs__target_id__reboot_result_post",
+        "security": [
+          {
+            "DeployCoreAgent": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "target_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Target Id"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RebootResult"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agent/{device_id}/jobs/{target_id}/manifest": {
       "get": {
         "tags": [
@@ -2485,6 +2546,209 @@
           }
         }
       }
+    },
+    "/api/v1/detection-previews": {
+      "post": {
+        "tags": [
+          "Detection Preview"
+        ],
+        "summary": "Create Preview",
+        "operationId": "create_preview_api_v1_detection_previews_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeployCoreSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/detection-previews/{preview_id}": {
+      "get": {
+        "tags": [
+          "Detection Preview"
+        ],
+        "summary": "Get Preview",
+        "operationId": "get_preview_api_v1_detection_previews__preview_id__get",
+        "security": [
+          {
+            "DeployCoreSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "preview_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Preview Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/{device_id}/detection-previews/poll": {
+      "post": {
+        "tags": [
+          "Detection Preview"
+        ],
+        "summary": "Poll Preview",
+        "operationId": "poll_preview_api_v1_agent__device_id__detection_previews_poll_post",
+        "security": [
+          {
+            "DeployCoreAgent": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewPoll"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/{device_id}/detection-previews/{preview_id}/result": {
+      "post": {
+        "tags": [
+          "Detection Preview"
+        ],
+        "summary": "Report Preview",
+        "operationId": "report_preview_api_v1_agent__device_id__detection_previews__preview_id__result_post",
+        "security": [
+          {
+            "DeployCoreAgent": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "preview_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Preview Id"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewResult"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2750,6 +3014,62 @@
           "role"
         ],
         "title": "CreateUser"
+      },
+      "DetectionGroup": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "all",
+              "any"
+            ],
+            "title": "Kind"
+          },
+          "schema_version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Schema Version",
+            "default": 1
+          },
+          "rules": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/MSIProduct"
+                },
+                {
+                  "$ref": "#/components/schemas/RegistrySoftware"
+                },
+                {
+                  "$ref": "#/components/schemas/FileExists"
+                },
+                {
+                  "$ref": "#/components/schemas/FileVersion"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "kind",
+                "mapping": {
+                  "file_exists": "#/components/schemas/FileExists",
+                  "file_version": "#/components/schemas/FileVersion",
+                  "msi_product": "#/components/schemas/MSIProduct",
+                  "registry_software": "#/components/schemas/RegistrySoftware"
+                }
+              }
+            },
+            "type": "array",
+            "maxItems": 8,
+            "minItems": 2,
+            "title": "Rules"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "rules"
+        ],
+        "title": "DetectionGroup"
       },
       "DeviceDetail": {
         "properties": {
@@ -3379,6 +3699,7 @@
                 "already_installed",
                 "already_absent",
                 "reboot_required",
+                "awaiting_reboot",
                 "unknown"
               ]
             },
@@ -3542,6 +3863,7 @@
                 "already_installed",
                 "already_absent",
                 "reboot_required",
+                "awaiting_reboot",
                 "unknown"
               ]
             },
@@ -3682,12 +4004,17 @@
               },
               {
                 "$ref": "#/components/schemas/FileVersion"
+              },
+              {
+                "$ref": "#/components/schemas/DetectionGroup"
               }
             ],
             "title": "Detection",
             "discriminator": {
               "propertyName": "kind",
               "mapping": {
+                "all": "#/components/schemas/DetectionGroup",
+                "any": "#/components/schemas/DetectionGroup",
                 "file_exists": "#/components/schemas/FileExists",
                 "file_version": "#/components/schemas/FileVersion",
                 "msi_product": "#/components/schemas/MSIProduct",
@@ -4021,6 +4348,159 @@
         "type": "object",
         "title": "PollReply"
       },
+      "PreviewInput": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Device Id"
+          },
+          "version_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Version Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "device_id",
+          "version_id"
+        ],
+        "title": "PreviewInput"
+      },
+      "PreviewPoll": {
+        "properties": {
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviewTask"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PreviewPoll"
+      },
+      "PreviewResult": {
+        "properties": {
+          "observation": {
+            "type": "string",
+            "enum": [
+              "installed",
+              "not_installed",
+              "unknown"
+            ],
+            "title": "Observation"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "observation"
+        ],
+        "title": "PreviewResult"
+      },
+      "PreviewTask": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "rule": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MSIProduct"
+              },
+              {
+                "$ref": "#/components/schemas/RegistrySoftware"
+              },
+              {
+                "$ref": "#/components/schemas/FileExists"
+              },
+              {
+                "$ref": "#/components/schemas/FileVersion"
+              },
+              {
+                "$ref": "#/components/schemas/DetectionGroup"
+              }
+            ],
+            "title": "Rule",
+            "discriminator": {
+              "propertyName": "kind",
+              "mapping": {
+                "all": "#/components/schemas/DetectionGroup",
+                "any": "#/components/schemas/DetectionGroup",
+                "file_exists": "#/components/schemas/FileExists",
+                "file_version": "#/components/schemas/FileVersion",
+                "msi_product": "#/components/schemas/MSIProduct",
+                "registry_software": "#/components/schemas/RegistrySoftware"
+              }
+            }
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "rule"
+        ],
+        "title": "PreviewTask"
+      },
+      "PreviewView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "checking",
+              "completed",
+              "expired"
+            ],
+            "title": "Status"
+          },
+          "observation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "installed",
+                  "not_installed",
+                  "unknown"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "expires_at",
+          "status",
+          "observation"
+        ],
+        "title": "PreviewView"
+      },
       "PublicUser": {
         "properties": {
           "id": {
@@ -4043,6 +4523,38 @@
           "role"
         ],
         "title": "PublicUser"
+      },
+      "RebootResult": {
+        "properties": {
+          "attempt_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Attempt Id"
+          },
+          "detection": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "installed",
+                  "not_installed",
+                  "unknown"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detection"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "attempt_id",
+          "detection"
+        ],
+        "title": "RebootResult"
       },
       "RegistrySoftware": {
         "properties": {
@@ -4139,7 +4651,9 @@
                   "platform_unsupported",
                   "manifest_invalid",
                   "process_error",
-                  "operator_resolved"
+                  "operator_resolved",
+                  "detection_mismatch",
+                  "reboot_timeout"
                 ]
               },
               {
@@ -4160,6 +4674,45 @@
               }
             ],
             "title": "Output Bytes"
+          },
+          "process_started": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Process Started"
+          },
+          "detection": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "installed",
+                  "not_installed",
+                  "unknown"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detection"
+          },
+          "reboot_pending": {
+            "anyOf": [
+              {
+                "type": "boolean",
+                "const": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reboot Pending"
           }
         },
         "additionalProperties": false,
@@ -4463,6 +5016,7 @@
               "already_installed",
               "already_absent",
               "reboot_required",
+              "awaiting_reboot",
               "unknown"
             ],
             "title": "State"
@@ -4541,7 +5095,9 @@
                   "platform_unsupported",
                   "manifest_invalid",
                   "process_error",
-                  "operator_resolved"
+                  "operator_resolved",
+                  "detection_mismatch",
+                  "reboot_timeout"
                 ]
               },
               {
@@ -4560,6 +5116,111 @@
               }
             ],
             "title": "Output Bytes"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "process_started": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Process Started"
+          },
+          "detection": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "installed",
+                  "not_installed",
+                  "unknown"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detection"
+          },
+          "reboot_deadline": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reboot Deadline"
+          },
+          "reboot_detection": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "installed",
+                  "not_installed",
+                  "unknown"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reboot Detection"
+          },
+          "reboot_finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reboot Finished At"
+          },
+          "reboot_diagnostic": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "download_failed",
+                  "hash_mismatch",
+                  "insufficient_space",
+                  "detection_failed",
+                  "installer_error",
+                  "timeout",
+                  "interrupted",
+                  "platform_unsupported",
+                  "manifest_invalid",
+                  "process_error",
+                  "operator_resolved",
+                  "detection_mismatch",
+                  "reboot_timeout"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reboot Diagnostic"
           }
         },
         "additionalProperties": false,
@@ -4804,12 +5465,17 @@
               },
               {
                 "$ref": "#/components/schemas/FileVersion"
+              },
+              {
+                "$ref": "#/components/schemas/DetectionGroup"
               }
             ],
             "title": "Detection",
             "discriminator": {
               "propertyName": "kind",
               "mapping": {
+                "all": "#/components/schemas/DetectionGroup",
+                "any": "#/components/schemas/DetectionGroup",
                 "file_exists": "#/components/schemas/FileExists",
                 "file_version": "#/components/schemas/FileVersion",
                 "msi_product": "#/components/schemas/MSIProduct",
@@ -4928,12 +5594,17 @@
               },
               {
                 "$ref": "#/components/schemas/FileVersion"
+              },
+              {
+                "$ref": "#/components/schemas/DetectionGroup"
               }
             ],
             "title": "Detection",
             "discriminator": {
               "propertyName": "kind",
               "mapping": {
+                "all": "#/components/schemas/DetectionGroup",
+                "any": "#/components/schemas/DetectionGroup",
                 "file_exists": "#/components/schemas/FileExists",
                 "file_version": "#/components/schemas/FileVersion",
                 "msi_product": "#/components/schemas/MSIProduct",

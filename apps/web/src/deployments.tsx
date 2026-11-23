@@ -4,10 +4,10 @@ import { useRef, useState, type FormEvent } from 'react'
 import { api, type Session } from './api'
 import { Dialog } from './components/ui/dialog'
 import { ActivityFeed, ConfirmDialog, EmptyState, LoadingSkeleton, SectionTitle, StatusBadge } from './design'
-import { Action, Field, FormError, Panel, errorMessage, type Translate } from './ui'
+import { Action, Field, FormError, Panel, detectionLabel, errorMessage, type Translate } from './ui'
 
 type Operation = 'install' | 'uninstall'
-type TargetState = 'queued' | 'leased' | 'running' | 'not_executed' | 'cancelled' | 'failed' | 'succeeded' | 'already_installed' | 'already_absent' | 'reboot_required' | 'unknown'
+type TargetState = 'queued' | 'leased' | 'running' | 'not_executed' | 'cancelled' | 'failed' | 'succeeded' | 'already_installed' | 'already_absent' | 'reboot_required' | 'awaiting_reboot' | 'unknown'
 interface Job {
   id: string; package_name: string; version: string; operation: Operation; mode: 'transport_only' | 'execute_v1'; created_at: string
   counts: Partial<Record<TargetState, number>>
@@ -15,6 +15,8 @@ interface Job {
 interface Target {
   id: string; hostname: string; state: TargetState; cancel_requested: boolean
   attempt: number | null; lease_expires_at: string | null; recovery_required: boolean
+  started_at?: string | null; process_started?: boolean | null; detection?: string | null
+  reboot_detection?: string | null; reboot_deadline?: string | null; reboot_finished_at?: string | null; reboot_diagnostic?: string | null
   stage?: string; exit_code?: number | null; diagnostic?: string; output_bytes?: number | null
 }
 interface Entry { id: number; target_id: string | null; action: string; created_at: string }
@@ -26,10 +28,10 @@ export interface DeploymentPreset { packageId?: string; versionId?: string; prod
 interface Input { mode: 'transport_only' | 'execute_v1'; version_id: string; operation: Operation; device_ids: string[]; request_id: string }
 const pageSize = 25
 
-function compatible(version: string) {
+function compatible(version: string, minimumPatch = 4) {
   if (!/^\d{1,4}\.\d{1,4}\.\d{1,4}$/.test(version)) return false
   const [major, minor, patch] = version.split('.').map(Number)
-  return major > 0 || minor > 3 || (minor === 3 && patch >= 4)
+  return major > 0 || minor > 3 || (minor === 3 && patch >= minimumPatch)
 }
 
 function stateLabel(state: TargetState, t: Translate) {
@@ -38,8 +40,28 @@ function stateLabel(state: TargetState, t: Translate) {
     cancelled: t('Отменено', 'Cancelled'), not_executed: t('Без запуска', 'Not executed'),
     failed: t('Ошибка', 'Failed'), succeeded: t('Успешно', 'Succeeded'),
     already_installed: t('Уже установлено', 'Already installed'), already_absent: t('Уже отсутствует', 'Already absent'),
-    reboot_required: t('Требуется перезагрузка', 'Restart required'), unknown: t('Исход неизвестен', 'Unknown outcome'),
+    reboot_required: t('Требуется перезагрузка', 'Restart required'),
+    awaiting_reboot: t('Ожидается проверка после перезагрузки', 'Awaiting detection after restart'), unknown: t('Исход неизвестен', 'Unknown outcome'),
   }[state]
+}
+
+function diagnosis(code: string, t: Translate) {
+  const labels: Record<string, string> = {
+    detection_failed: t('Проверка обнаружения недоступна', 'Detection could not complete'),
+    detection_mismatch: t('Обнаруженное состояние не совпадает с ожидаемым', 'Detected state differs from the expected state'),
+    reboot_timeout: t('Срок проверки после перезагрузки истёк', 'Post-restart verification expired'),
+    download_failed: t('Не удалось скачать установщик', 'Installer download failed'),
+    hash_mismatch: t('Размер или SHA-256 установщика не совпадает', 'Installer size or SHA-256 mismatch'),
+    insufficient_space: t('Недостаточно места на устройстве', 'Insufficient disk space'),
+    installer_error: t('Установщик вернул недопустимый код', 'Installer returned an unexpected exit code'),
+    timeout: t('Истёк таймаут запуска', 'Installer timed out'),
+    interrupted: t('Попытка прервалась', 'Attempt was interrupted'),
+    platform_unsupported: t('Версия или архитектура Windows не поддерживается', 'Unsupported Windows build or architecture'),
+    manifest_invalid: t('Не удалось получить допустимый манифест', 'Could not obtain a valid manifest'),
+    process_error: t('Ошибка при запуске или наблюдении за процессом', 'Process launch or monitoring failed'),
+    operator_resolved: t('Исход обработан вручную', 'Outcome resolved manually'),
+  }
+  return labels[code] ?? code
 }
 
 function operationLabel(operation: Operation, t: Translate) {
@@ -48,7 +70,7 @@ function operationLabel(operation: Operation, t: Translate) {
 
 function JobProgress({ job, t }: { job: Job; t: Translate }) {
   const total = Object.values(job.counts).reduce((sum, count) => sum + count, 0)
-  const complete = total - (job.counts.queued ?? 0) - (job.counts.leased ?? 0) - (job.counts.running ?? 0) - (job.counts.unknown ?? 0)
+  const complete = total - (job.counts.queued ?? 0) - (job.counts.leased ?? 0) - (job.counts.running ?? 0) - (job.counts.unknown ?? 0) - (job.counts.awaiting_reboot ?? 0)
   return <div className="grid gap-1.5 text-xs text-muted-foreground">
     <span>{t('Завершено целей', 'Targets finished')}: {complete}/{total}</span>
     <progress className="h-1.5 w-full max-w-xs accent-primary" value={complete} max={Math.max(1, total)}
@@ -67,7 +89,7 @@ function NewJob({ session, t, close, created, preset }: Props & { close: () => v
   const [confirm, setConfirm] = useState(false)
   const [term, setTerm] = useState('')
   const [offset, setOffset] = useState(0)
-  const [selected, setSelected] = useState(() => new Map<string, string>(preset?.deviceId ? [[preset.deviceId, preset.deviceName ?? preset.deviceId]] : []))
+  const [selected, setSelected] = useState(() => new Map<string, { hostname: string; agent_version?: string }>(preset?.deviceId ? [[preset.deviceId, { hostname: preset.deviceName ?? preset.deviceId }]] : []))
   const submission = useRef<{ fingerprint: string; requestId: string } | null>(null)
 
   const products = useQuery({
@@ -84,7 +106,9 @@ function NewJob({ session, t, close, created, preset }: Props & { close: () => v
   })
   const eligible = (versions.data?.versions ?? []).filter(version => version.approved_at && (operation === 'install' || version.uninstall_args !== null))
   const chosen = eligible.find(version => version.id === versionId)
-  const canSubmit = !!chosen && selected.size > 0 && (mode !== 'execute_v1' || operation !== 'uninstall' || session.user.role === 'super_admin')
+  const minimumPatch = chosen?.detection.kind === 'all' || chosen?.detection.kind === 'any' ? 5 : 4
+  const compatibleSelection = mode !== 'execute_v1' || [...selected.values()].every(device => !device.agent_version || compatible(device.agent_version, minimumPatch))
+  const canSubmit = compatibleSelection && !!chosen && selected.size > 0 && (mode !== 'execute_v1' || operation !== 'uninstall' || session.user.role === 'super_admin')
   const mutation = useMutation({
     mutationFn: (body: Input) => api<Job>('/deployments', { method: 'POST', body, csrf: session.csrf_token }),
     onSuccess: job => created(job.id),
@@ -110,7 +134,7 @@ function NewJob({ session, t, close, created, preset }: Props & { close: () => v
     setSelected(current => {
       const next = new Map(current)
       if (next.has(device.id)) next.delete(device.id)
-      else if (next.size < 100) next.set(device.id, device.hostname)
+      else if (next.size < 100) next.set(device.id, device)
       return next
     })
   }
@@ -118,7 +142,7 @@ function NewJob({ session, t, close, created, preset }: Props & { close: () => v
   return <Dialog title={confirm ? t('Подтвердите запуск', 'Confirm execution') : t('Новое задание', 'New job')} closeLabel={t('Закрыть', 'Close')} close={close}>
     {confirm ? <div className="grid gap-3 text-sm">
       <p>{operationLabel(operation, t)} · {chosen?.version} · {chosen?.architecture}</p>
-      <p className="break-words">{[...selected.values()].join(', ')}</p>
+      <p className="break-words">{[...selected.values()].map(device => device.hostname).join(', ')}</p>
       <code className="break-all">{JSON.stringify(operation === 'install' ? chosen?.install_args : chosen?.uninstall_args)}</code>
       <FormError message={mutation.error && errorMessage(mutation.error, t)} />
       <div className="flex flex-wrap gap-2">
@@ -165,13 +189,14 @@ function NewJob({ session, t, close, created, preset }: Props & { close: () => v
       {versions.data && !eligible.length && <p className="text-sm text-muted-foreground">
         {t('Для этой операции нет утверждённых версий.', 'There are no approved versions for this operation.')}
       </p>}
+      {!compatibleSelection && <FormError message={t('Уберите устройства с несовместимой версией агента.', 'Deselect devices running an incompatible agent version.')} />}
       <Field label={t('Имя, FQDN или IP устройства', 'Device hostname, FQDN or IP')} maxLength={120}
         value={term} onChange={event => { setTerm(event.target.value); setOffset(0) }} />
       {computers.isPending && <LoadingSkeleton label={t('Загрузка устройств', 'Loading devices')} />}
       <ul className="max-h-36 overflow-y-auto rounded-lg border border-border p-2 text-sm">
         {computers.data?.items.map(device => <li key={device.id}>
           <label className="flex items-center gap-2 py-1">
-            <input type="checkbox" checked={selected.has(device.id)} disabled={device.agent_revoked || (mode === 'execute_v1' && !compatible(device.agent_version) && !selected.has(device.id)) || (selected.size === 100 && !selected.has(device.id))}
+            <input type="checkbox" checked={selected.has(device.id)} disabled={device.agent_revoked || (mode === 'execute_v1' && !compatible(device.agent_version, minimumPatch) && !selected.has(device.id)) || (selected.size === 100 && !selected.has(device.id))}
               onChange={() => toggle(device)} />
             <span className="min-w-0 grow break-all">{device.hostname}</span>
             <span className="text-xs text-muted-foreground">{device.agent_revoked ? t('Отозван', 'Revoked') : device.online ? t('Онлайн', 'Online') : t('Офлайн', 'Offline')}</span>
@@ -185,7 +210,7 @@ function NewJob({ session, t, close, created, preset }: Props & { close: () => v
       </div>}
       <p className="text-sm text-muted-foreground">{t('Выбрано устройств', 'Selected devices')}: {selected.size}/100</p>
       {selected.size > 0 && <p className="max-h-16 overflow-y-auto break-words text-xs text-muted-foreground">
-        {[...selected.values()].join(', ')}
+        {[...selected.values()].map(device => device.hostname).join(', ')}
       </p>}
       <FormError message={(products.error || versions.error || computers.error || mutation.error) &&
         errorMessage(products.error || versions.error || computers.error || mutation.error, t)} />
@@ -238,6 +263,10 @@ function JobDetails({ session, t, id, back }: Props & { id: string; back: () => 
     recovered: t('Связь восстановлена', 'Lease recovered'), delivery_failed: t('Исчерпаны попытки выдачи', 'Delivery attempts exhausted'),
     not_executed: t('Проверка завершилась без запуска', 'Transport test completed without execution'),
     cancel_requested: t('Запрошена отмена', 'Cancellation requested'), cancelled: t('Отменено', 'Cancelled'),
+    awaiting_reboot: stateLabel('awaiting_reboot', t), reboot_required: stateLabel('reboot_required', t),
+    reboot_verified: t('Результат подтверждён после перезагрузки', 'Result verified after restart'),
+    reboot_timeout: diagnosis('reboot_timeout', t), detection_mismatch: diagnosis('detection_mismatch', t),
+    detection_failed: diagnosis('detection_failed', t),
   }
   return <div className="grid gap-4">
     <Action secondary onClick={back}>{t('К очереди', 'Back to queue')}</Action>
@@ -260,7 +289,15 @@ function JobDetails({ session, t, id, back }: Props & { id: string; back: () => 
           <StatusBadge tone={target.state === 'failed' ? 'danger' : 'neutral'}>{stateLabel(target.state, t)}</StatusBadge>
           {target.stage && <span>{stages[target.stage] ?? target.stage}</span>}
           {target.exit_code != null && <code>{t('Код', 'Exit')}: {target.exit_code}</code>}
-          {target.diagnostic && <code className="break-all">{target.diagnostic}</code>}
+          {target.process_started === true && <span>{t('Процесс запущен', 'Process started')}</span>}
+          {target.process_started === false && <span>{t('Процесс не запустился', 'Process failed to start')}</span>}
+          {target.process_started == null && target.started_at && <span>{t('Запуск разрешён', 'Launch authorized')}</span>}
+          {target.detection && <span>{detectionLabel(target.detection, t)}</span>}
+          {target.reboot_detection && <span>{t('После перезагрузки', 'After restart')}: {detectionLabel(target.reboot_detection, t)}</span>}
+          {target.state === 'awaiting_reboot' && target.reboot_deadline && <span>{t('Срок проверки', 'Verification deadline')}: {new Date(target.reboot_deadline).toLocaleString()}</span>}
+          {[target.diagnostic, target.reboot_diagnostic].map((code, index) => code &&
+            <span key={index} title={code}>{code === 'detection_failed' && !target.detection && !target.reboot_detection
+              ? t('Результат обнаружения не подтверждён', 'Detection result could not be confirmed') : diagnosis(code, t)}</span>)}
           {target.output_bytes != null && <span>{t('Вывод, байт', 'Output bytes')}: {target.output_bytes}</span>}
           {target.recovery_required && session.user.role === 'super_admin' &&
             <Action secondary onClick={() => setTargetAction({ id: target.id, type: 'resolve', key: crypto.randomUUID() })}>{t('Разрешить вручную', 'Resolve manually')}</Action>}

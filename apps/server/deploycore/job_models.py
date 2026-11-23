@@ -29,10 +29,10 @@ class DeploymentTarget(Base):
     __tablename__ = "deployment_targets"
     __table_args__ = (
         UniqueConstraint("job_id", "device_id", name="deployment_device_identity"),
-        CheckConstraint("state IN ('queued', 'leased', 'running', 'not_executed', 'cancelled','failed','succeeded','already_installed','already_absent','reboot_required','unknown')",
+        CheckConstraint("state IN ('queued', 'leased', 'running', 'not_executed', 'cancelled','failed','succeeded','already_installed','already_absent','reboot_required','awaiting_reboot','unknown')",
                         name="deployment_target_state"),
         Index("deployment_one_active_target", "device_id", unique=True,
-              postgresql_where=text("state IN ('leased', 'running', 'unknown')")),
+              postgresql_where=text("state IN ('leased', 'running', 'awaiting_reboot', 'unknown')")),
         Index("deployment_target_device_state", "device_id", "state"),
     )
 
@@ -64,6 +64,11 @@ class DeploymentAttempt(Base):
     exit_code: Mapped[int | None] = mapped_column(BigInteger)
     diagnostic: Mapped[str | None] = mapped_column(String(32))
     output_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    process_started: Mapped[bool | None]
+    detection: Mapped[str | None] = mapped_column(String(16))
+    reboot_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reboot_detection: Mapped[str | None] = mapped_column(String(16))
+    reboot_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     outcome: Mapped[str | None] = mapped_column(String(32))
 
 

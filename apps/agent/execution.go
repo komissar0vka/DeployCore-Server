@@ -24,11 +24,13 @@ var msiProperty = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,71}=[^\x00-\x1f]*$`)
 var errArtifactIntegrity = errors.New("artifact hash or length mismatch")
 
 type Detection struct {
-	Kind        string `json:"kind"`
-	ProductCode string `json:"product_code"`
-	DisplayName string `json:"display_name"`
-	Path        string `json:"path"`
-	Version     string `json:"version"`
+	SchemaVersion int         `json:"schema_version,omitempty"`
+	Rules         []Detection `json:"rules,omitempty"`
+	Kind          string      `json:"kind"`
+	ProductCode   string      `json:"product_code"`
+	DisplayName   string      `json:"display_name"`
+	Path          string      `json:"path"`
+	Version       string      `json:"version"`
 }
 
 type Manifest struct {
@@ -45,10 +47,13 @@ type Manifest struct {
 }
 
 type ExecutionResult struct {
-	Outcome     string  `json:"outcome"`
-	ExitCode    *uint32 `json:"exit_code,omitempty"`
-	Diagnostic  string  `json:"diagnostic,omitempty"`
-	OutputBytes *int64  `json:"output_bytes,omitempty"`
+	ProcessStarted *bool          `json:"process_started,omitempty"`
+	Detection      DetectionState `json:"detection,omitempty"`
+	RebootPending  bool           `json:"reboot_pending,omitempty"`
+	Outcome        string         `json:"outcome"`
+	ExitCode       *uint32        `json:"exit_code,omitempty"`
+	Diagnostic     string         `json:"diagnostic,omitempty"`
+	OutputBytes    *int64         `json:"output_bytes,omitempty"`
 }
 
 type ExecutionHooks struct {
@@ -79,10 +84,24 @@ func (m Manifest) valid() bool {
 func msiArguments(operation, filename, logfile string, manifest Manifest) ([]string, error) {
 	mode, target := "/i", filename
 	if operation == "uninstall" {
-		if manifest.Detection.Kind != "msi_product" || !deviceIDPattern.MatchString(strings.ToLower(manifest.Detection.ProductCode)) {
+		product := manifest.Detection.ProductCode
+		if manifest.Detection.Kind == "all" || manifest.Detection.Kind == "any" {
+			product = ""
+			for _, leaf := range manifest.Detection.Rules {
+				if leaf.Kind == "msi_product" {
+					if product != "" {
+						return nil, fmt.Errorf("ambiguous MSI product code")
+					}
+					product = leaf.ProductCode
+				}
+			}
+		} else if manifest.Detection.Kind != "msi_product" {
+			product = ""
+		}
+		if !deviceIDPattern.MatchString(strings.ToLower(product)) {
 			return nil, fmt.Errorf("invalid MSI product code")
 		}
-		mode, target = "/x", "{"+manifest.Detection.ProductCode+"}"
+		mode, target = "/x", "{"+product+"}"
 	}
 	ui := "/qn"
 	properties := make([]string, 0, len(manifest.Args))
@@ -122,7 +141,7 @@ func verifyArtifact(destination io.Writer, source io.Reader, size int64, expecte
 	return nil
 }
 
-func (c *Client) download(ctx context.Context, path, credential, destination string, m Manifest) error {
+func (c *Client) download(ctx context.Context, path, credential, destination string, m Manifest, capabilities string) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.origin+path, nil)
@@ -131,6 +150,7 @@ func (c *Client) download(ctx context.Context, path, credential, destination str
 	}
 	req.Header.Set("Authorization", "Bearer "+credential)
 	req.Header.Set("Accept-Encoding", "identity")
+	req.Header.Set("X-DeployCore-Capabilities", capabilities)
 	stream := *c.http
 	stream.Timeout = 0
 	response, err := stream.Do(req)

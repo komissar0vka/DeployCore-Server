@@ -24,7 +24,19 @@ func (a Assignment) valid() bool {
 		(a.Operation == "install" || a.Operation == "uninstall")
 }
 
+type RebootCheck struct {
+	Rule        Detection       `json:"rule"`
+	Boot        string          `json:"boot"`
+	Reported    bool            `json:"reported,omitempty"`
+	Deadline    time.Time       `json:"deadline"`
+	Observation *DetectionState `json:"observation,omitempty"`
+}
+
 type JobJournal struct {
+	ProcessStarted *bool          `json:"process_started,omitempty"`
+	Detection      DetectionState `json:"detection,omitempty"`
+	Reboot         *RebootCheck   `json:"reboot,omitempty"`
+
 	Server      string     `json:"server"`
 	DeviceID    string     `json:"device_id"`
 	Job         Assignment `json:"job"`
@@ -42,6 +54,22 @@ type JobTransport struct {
 	save    func(JobJournal) error
 	log     *log.Logger
 	execute Executor
+	detect  Detector
+	bootID  func() string
+}
+
+func (t *JobTransport) capabilities() string {
+	if t.detect != nil {
+		return "execute_v1, detection_v1"
+	}
+	if t.execute != nil {
+		return "execute_v1"
+	}
+	return ""
+}
+
+func (t *JobTransport) request(ctx context.Context, method, path string, in, out any) error {
+	return t.client.requestWithCapability(ctx, method, path, t.state.Credential, in, out, t.capabilities())
 }
 
 func (t *JobTransport) persist(next JobJournal) error {
@@ -76,11 +104,11 @@ func (t *JobTransport) step(ctx context.Context) error {
 		var poll struct {
 			Assignment *Assignment `json:"assignment"`
 		}
-		if err := t.client.requestWithCapability(ctx, http.MethodPost, base+"poll", t.state.Credential, nil, &poll, t.execute != nil); err != nil {
+		if err := t.request(ctx, http.MethodPost, base+"poll", nil, &poll); err != nil {
 			return err
 		}
 		if poll.Assignment == nil {
-			return nil
+			return t.preview(ctx)
 		}
 		if !poll.Assignment.valid() {
 			return fmt.Errorf("unsupported deployment assignment")
@@ -131,13 +159,25 @@ func (t *JobTransport) step(ctx context.Context) error {
 			}
 		}
 	}
+	if next.Reboot != nil && next.Reboot.Reported {
+		return t.recheck(ctx, path)
+	}
 	result := struct {
 		AttemptID string `json:"attempt_id"`
 		ExecutionResult
 	}{next.Job.AttemptID, ExecutionResult{Outcome: next.Outcome, Diagnostic: next.Diagnostic,
-		ExitCode: next.ExitCode, OutputBytes: next.OutputBytes}}
-	if err := t.client.request(ctx, http.MethodPost, path+"result", t.state.Credential, result, nil); err != nil {
+		ExitCode: next.ExitCode, OutputBytes: next.OutputBytes, Detection: next.Detection, ProcessStarted: next.ProcessStarted, RebootPending: next.Reboot != nil}}
+	if err := t.request(ctx, http.MethodPost, path+"result", result, nil); err != nil {
 		return err
+	}
+	if next.Reboot != nil {
+		pending := *next.Reboot
+		pending.Reported = true
+		next.Reboot = &pending
+		if err := t.persist(next); err != nil {
+			return err
+		}
+		return t.recheck(ctx, path)
 	}
 	t.log.Printf("Deployment result accepted: %s %s", next.Job.TargetID, next.Outcome)
 	return t.persist(JobJournal{})
@@ -179,7 +219,7 @@ func (t *JobTransport) executeJob(parent context.Context, path string) error {
 	}
 	suffix := "?attempt_id=" + attempt
 	var manifest Manifest
-	if err := t.client.request(ctx, http.MethodGet, path+"manifest"+suffix, t.state.Credential, nil, &manifest); err != nil {
+	if err := t.request(ctx, http.MethodGet, path+"manifest"+suffix, nil, &manifest); err != nil {
 		var status StatusError
 		if errors.As(err, &status) && status == http.StatusConflict {
 			return t.recordExecution(ExecutionResult{Outcome: "failed", Diagnostic: "manifest_invalid"})
@@ -204,10 +244,14 @@ func (t *JobTransport) executeJob(parent context.Context, path string) error {
 			}
 		}
 	}()
+	boot := ""
+	if t.bootID != nil {
+		boot = t.bootID()
+	}
 	result, err := t.execute(ctx, job, manifest, ExecutionHooks{
 		Stage: heartbeat,
 		Download: func(destination string, m Manifest) error {
-			return t.client.download(ctx, path+"artifact"+suffix, t.state.Credential, destination, m)
+			return t.client.download(ctx, path+"artifact"+suffix, t.state.Credential, destination, m, t.capabilities())
 		},
 		Start: func() error {
 			if err := ctx.Err(); err != nil {
@@ -221,7 +265,7 @@ func (t *JobTransport) executeJob(parent context.Context, path string) error {
 			payload := struct {
 				AttemptID string `json:"attempt_id"`
 			}{attempt}
-			return t.client.request(ctx, http.MethodPost, path+"start", t.state.Credential, payload, nil)
+			return t.request(ctx, http.MethodPost, path+"start", payload, nil)
 		},
 	})
 	cancel()
@@ -235,11 +279,82 @@ func (t *JobTransport) executeJob(parent context.Context, path string) error {
 		}
 		return err
 	}
+	if result.RebootPending {
+		next := t.journal
+		next.Reboot = &RebootCheck{Rule: manifest.Detection, Boot: boot, Deadline: time.Now().Add(24 * time.Hour)}
+		return t.persist(next.withResult(result))
+	}
 	return t.recordExecution(result)
 }
 
 func (t *JobTransport) recordExecution(result ExecutionResult) error {
+	return t.persist(t.journal.withResult(result))
+}
+
+func (j JobJournal) withResult(result ExecutionResult) JobJournal {
+	j.Outcome, j.ExitCode, j.Diagnostic, j.OutputBytes = result.Outcome, result.ExitCode, result.Diagnostic, result.OutputBytes
+	j.Detection, j.ProcessStarted = result.Detection, result.ProcessStarted
+	return j
+}
+
+func (t *JobTransport) recheck(ctx context.Context, path string) error {
 	next := t.journal
-	next.Outcome, next.ExitCode, next.Diagnostic, next.OutputBytes = result.Outcome, result.ExitCode, result.Diagnostic, result.OutputBytes
-	return t.persist(next)
+	pending := *next.Reboot
+	if pending.Observation == nil && time.Now().Before(pending.Deadline) {
+		if t.detect == nil || t.bootID == nil || pending.Boot == "" {
+			return nil
+		}
+		boot := t.bootID()
+		if boot == "" || boot == pending.Boot {
+			return nil
+		}
+		check, cancel := context.WithTimeout(ctx, 20*time.Second)
+		observation := t.detect(check, pending.Rule)
+		cancel()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		pending.Observation = &observation
+		next.Reboot = &pending
+		if err := t.persist(next); err != nil {
+			return err
+		}
+	}
+	result := struct {
+		AttemptID string          `json:"attempt_id"`
+		Detection *DetectionState `json:"detection"`
+	}{next.Job.AttemptID, pending.Observation}
+	if err := t.request(ctx, http.MethodPost, path+"reboot-result", result, nil); err != nil {
+		var status StatusError
+		if !errors.As(err, &status) || (status != http.StatusConflict && status != http.StatusNotFound) {
+			return err
+		}
+		t.log.Printf("Post-restart verification closed by server: %s %v", next.Job.TargetID, err)
+	}
+	return t.persist(JobJournal{})
+}
+
+func (t *JobTransport) preview(ctx context.Context) error {
+	if t.detect == nil {
+		return nil
+	}
+	base := "/api/v1/agent/" + t.state.DeviceID + "/detection-previews/"
+	var poll struct {
+		Task *struct {
+			ID   string    `json:"id"`
+			Rule Detection `json:"rule"`
+		} `json:"task"`
+	}
+	if err := t.request(ctx, http.MethodPost, base+"poll", nil, &poll); err != nil || poll.Task == nil {
+		return err
+	}
+	if !deviceIDPattern.MatchString(poll.Task.ID) {
+		return fmt.Errorf("invalid detection preview ID")
+	}
+	check, cancel := context.WithTimeout(ctx, 20*time.Second)
+	observation := t.detect(check, poll.Task.Rule)
+	cancel()
+	return t.request(ctx, http.MethodPost, base+poll.Task.ID+"/result", struct {
+		Observation DetectionState `json:"observation"`
+	}{observation}, nil)
 }

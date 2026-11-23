@@ -19,10 +19,10 @@ def exercise_packages(check, login, sql, compose, base, context, admin):
     viewer = {"cookie": viewer_cookie, "csrf": viewer_csrf}
     fields = {"name": "Catalog test", "publisher": "Test CA", "description": "Isolated fixture"}
 
-    def create_version(path, version, installer, architecture="x64"):
+    def create_version(path, version, installer, architecture="x64", detection=None):
         return check(path + "/versions", {201}, method="POST", **operator, data={
             "version": version, "architecture": architecture, "installer": installer,
-            "detection": {"kind": "registry_software", "display_name": "Catalog test", "version": version},
+            "detection": detection or {"kind": "registry_software", "display_name": "Catalog test", "version": version},
             "install_args": ["/quiet"] if installer == "exe" else ["/qn"],
             "uninstall_args": ["/remove"] if version in {"1.0", "2.0"} else None, "success_codes": [0, 3010], "min_windows_build": 19045,
             "timeout_seconds": 300, "reboot_required": True,
@@ -138,6 +138,16 @@ def exercise_packages(check, login, sql, compose, base, context, admin):
         assert check(signed_version_path + "/approve", {200}, method="POST", **operator)[1] == approval
         assert upload(signed_version_path + "/artifact", "signed.exe", b"replace", 409)["detail"] == "package_artifact_immutable"
 
+        leaf = {"kind": "file_exists", "path": r"C:\Program Files\DeployCoreSmoke\marker.exe"}
+        group = {"kind": "any", "schema_version": 1, "rules": [
+            leaf, {**leaf, "path": r"C:\Program Files\DeployCoreSmoke\other.exe"},
+        ]}
+        composite = create_version(path, "3.0", "exe", detection=group)
+        composite_path = f'{path}/versions/{composite["id"]}'
+        assert composite["detection"] == group
+        assert upload(composite_path + "/artifact", "signed.exe", signed_path, 201)["signature"] == "verified"
+        check(composite_path + "/approve", {200}, method="POST", **operator)
+
         signed_msi_path = directory / "signed.msi"
         subprocess.run([*compose, "cp", "server:/tmp/catalog-signed.msi", str(signed_msi_path)], check=True, stdout=subprocess.DEVNULL)
         signed_msi = create_version(path, "2.1", "msi")
@@ -158,7 +168,7 @@ def exercise_packages(check, login, sql, compose, base, context, admin):
     assert hashlib.sha256(downloaded).hexdigest() == record["sha256"]
     exercise_deployments(check, login, sql, compose, signed["id"], admin)
     assert stored[version["id"]] == manual
-    exercise_execution(check, login, sql, base, context, version["id"], admin)
+    exercise_execution(check, login, sql, base, context, version["id"], composite["id"], group, admin)
     sql(f"""
         DO $$
         BEGIN
@@ -184,5 +194,6 @@ def exercise_packages(check, login, sql, compose, base, context, admin):
     assert check("/packages", {200}, **viewer)[1]["total"] == 0
     actions = {event["action"] for event in check("/audit", {200}, **admin)[1]}
     assert actions >= {"package_created", "package_changed", "package_archived", "package_version_created",
-                       "package_artifact_uploaded", "package_version_approved"}
+                       "package_artifact_uploaded", "package_version_approved",
+                       "detection_preview_requested", "detection_preview_completed"}
     print("Catalog API, RBAC, streaming EXE/MSI, SHA-256, signing, approval, immutability and persistence passed")

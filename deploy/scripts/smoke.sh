@@ -48,10 +48,12 @@ test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT
 "${compose[@]}" run --rm --no-deps server python -m alembic upgrade 0002_devices
 "${compose[@]}" exec -T db psql -U deploycore -d deploycore -v ON_ERROR_STOP=1 \
     -c "UPDATE installation_settings SET instance_name='Pre-catalog instance' WHERE id=1"
+"${compose[@]}" run --rm --no-deps server python -m alembic upgrade 0006_manual_approval
+test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT version_num FROM alembic_version")" = '0006_manual_approval'
 "${compose[@]}" up -d --no-build --wait --wait-timeout 120
 test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT instance_name FROM installation_settings WHERE id=1")" = 'Pre-catalog instance'
-test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT version_num FROM alembic_version")" = '0006_manual_approval'
-echo 'Upgrade from 0002 preserved existing settings'
+test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT version_num FROM alembic_version")" = '0007_detection'
+echo 'Upgrade from 0002 through 0006 to 0007 preserved existing settings'
 
 request --fail "$base/" > "$scratch/index.html"
 grep -q '<title>DeployCore' "$scratch/index.html"

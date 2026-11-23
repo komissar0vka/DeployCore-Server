@@ -10,9 +10,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 func windowsExecutor(directory string) Executor {
@@ -26,15 +28,15 @@ func windowsExecutor(directory string) Executor {
 		if err := hooks.Stage("checking"); err != nil {
 			return ExecutionResult{}, err
 		}
-		installed, err := detectWindows(ctx, m.Detection)
-		if err != nil {
-			return fail("detection_failed")
+		observed := detectWindows(ctx, m.Detection)
+		if observed == unknown {
+			return ExecutionResult{Outcome: "failed", Diagnostic: "detection_failed", Detection: observed}, nil
 		}
-		if installed && job.Operation == "install" {
-			return ExecutionResult{Outcome: "already_installed"}, nil
+		if observed == installed && job.Operation == "install" {
+			return ExecutionResult{Outcome: "already_installed", Detection: observed}, nil
 		}
-		if !installed && job.Operation == "uninstall" {
-			return ExecutionResult{Outcome: "already_absent"}, nil
+		if observed == notInstalled && job.Operation == "uninstall" {
+			return ExecutionResult{Outcome: "already_absent", Detection: observed}, nil
 		}
 
 		// The attempt UUID is canonicalized before this function. A deterministic private workspace
@@ -91,7 +93,8 @@ func windowsExecutor(directory string) Executor {
 			return ExecutionResult{}, err
 		}
 		timeout, cancel := context.WithTimeout(ctx, time.Duration(m.TimeoutSeconds)*time.Second)
-		code, bytes, err := runWindowsProcess(timeout, program, args, work)
+		launched := false
+		code, bytes, err := runWindowsProcess(timeout, program, args, work, &launched)
 		cancel()
 		if info, statErr := os.Stat(logfile); statErr == nil {
 			bytes += info.Size()
@@ -100,27 +103,27 @@ func windowsExecutor(directory string) Executor {
 			diagnostic := "process_error"
 			if errors.Is(err, context.DeadlineExceeded) {
 				diagnostic = "timeout"
+			} else if errors.Is(err, context.Canceled) {
+				diagnostic = "interrupted"
 			}
-			return ExecutionResult{Outcome: "unknown", Diagnostic: diagnostic, OutputBytes: &bytes}, nil
+			outcome := "unknown"
+			if !launched && ctx.Err() == nil {
+				outcome = "failed"
+			}
+			return ExecutionResult{Outcome: outcome, Diagnostic: diagnostic, OutputBytes: &bytes, ProcessStarted: &launched}, nil
 		}
-		_ = hooks.Stage("verifying")
-		result := ExecutionResult{Outcome: "failed", ExitCode: &code, OutputBytes: &bytes}
+		result := ExecutionResult{Outcome: "failed", ExitCode: &code, OutputBytes: &bytes, ProcessStarted: &launched}
 		if !acceptedExit(code, m) {
 			result.Diagnostic = "installer_error"
 			return result, nil
 		}
-		present, err := detectWindows(ctx, m.Detection)
-		if err != nil || present != (job.Operation == "install") {
-			result.Diagnostic = "detection_failed"
-			if err != nil || code == 3010 || code == 1641 || m.RebootRequired {
-				result.Outcome = "unknown"
-			}
+		if code == 3010 || code == 1641 || m.RebootRequired {
+			result.Outcome, result.RebootPending = "reboot_required", true
 			return result, nil
 		}
-		result.Outcome = "succeeded"
-		if code == 3010 || code == 1641 || m.RebootRequired {
-			result.Outcome = "reboot_required"
-		}
+		_ = hooks.Stage("verifying")
+		result.Detection = detectWindows(ctx, m.Detection)
+		result.Outcome, result.Diagnostic = verificationResult(job.Operation, result.Detection)
 		return result, nil
 	}
 }
@@ -151,7 +154,7 @@ type jobAccounting struct {
 	faults, total, active, terminated      uint32
 }
 
-func runWindowsProcess(ctx context.Context, exe string, args []string, directory string) (uint32, int64, error) {
+func runWindowsProcess(ctx context.Context, exe string, args []string, directory string, launched *bool) (uint32, int64, error) {
 	app, err := windows.UTF16PtrFromString(exe)
 	if err != nil {
 		return 0, 0, err
@@ -223,6 +226,8 @@ func runWindowsProcess(ctx context.Context, exe string, args []string, directory
 		return 0, 0, err
 	}
 
+	*launched = true
+
 	var count byteCounter
 	drained := make(chan struct{})
 	go func() { _, _ = io.Copy(&count, read); close(drained) }()
@@ -254,59 +259,171 @@ func runWindowsProcess(ctx context.Context, exe string, args []string, directory
 	}
 }
 
-func detectWindows(ctx context.Context, rule Detection) (bool, error) {
+// Windows keeps this identifier stable across service restarts during a boot.
+func windowsBootID() string {
+	var environment struct {
+		BootIdentifier windows.GUID
+		FirmwareType   uint32
+		BootFlags      uint64
+	}
+	const systemBootEnvironmentInformation = 90
+	query := windows.NewLazySystemDLL("ntdll.dll").NewProc("NtQuerySystemInformation")
+	if query.Find() != nil {
+		return ""
+	}
+	status, _, _ := query.Call(systemBootEnvironmentInformation,
+		uintptr(unsafe.Pointer(&environment)), unsafe.Sizeof(environment), 0)
+	if status != 0 || environment.BootIdentifier == (windows.GUID{}) {
+		return ""
+	}
+	return environment.BootIdentifier.String()
+}
+
+func detectWindows(ctx context.Context, rule Detection) DetectionState {
+	check, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	return evaluateDetection(check, rule, detectWindowsLeaf)
+}
+
+func detectWindowsLeaf(ctx context.Context, rule Detection) DetectionState {
 	switch rule.Kind {
 	case "registry_software":
-		list, err := machineSoftware(ctx)
-		if err != nil {
-			return false, err
-		}
-		for item := range list {
-			if strings.EqualFold(item.Name, rule.DisplayName) && item.Version == rule.Version {
-				return true, nil
-			}
-		}
-		return false, nil
+		return detectRegistrySoftware(ctx, rule)
 	case "msi_product":
-		if !deviceIDPattern.MatchString(strings.ToLower(rule.ProductCode)) {
-			return false, fmt.Errorf("invalid product code")
-		}
 		code := windows.StringToUTF16Ptr("{" + rule.ProductCode + "}")
-		result, _, _ := windows.NewLazySystemDLL("msi.dll").NewProc("MsiQueryProductStateW").Call(uintptr(unsafe.Pointer(code)))
+		query := windows.NewLazySystemDLL("msi.dll").NewProc("MsiQueryProductStateW")
+		if query.Find() != nil {
+			return unknown
+		}
+		result, _, _ := query.Call(uintptr(unsafe.Pointer(code)))
 		switch int32(result) {
 		case 3, 5:
-			return true, nil
+			return installed
 		case -1, 1, 2:
-			return false, nil
-		default:
-			return false, fmt.Errorf("indeterminate product state")
+			return notInstalled
 		}
 	case "file_exists", "file_version":
-		return detectFile(rule)
-	default:
-		return false, fmt.Errorf("unknown detection rule")
+		present, err := detectFile(rule)
+		if err == nil {
+			if present {
+				return installed
+			}
+			return notInstalled
+		}
 	}
+	return unknown
+}
+
+func detectRegistrySoftware(ctx context.Context, rule Detection) DetectionState {
+	result := notInstalled
+	for _, view := range []uint32{registry.WOW64_64KEY, registry.WOW64_32KEY} {
+		state := detectRegistryView(ctx, rule, view)
+		if state == installed {
+			return installed
+		}
+		if state == unknown {
+			result = unknown
+		}
+	}
+	return result
+}
+
+func detectRegistryView(ctx context.Context, rule Detection, view uint32) DetectionState {
+	root, err := registry.OpenKey(registry.LOCAL_MACHINE, uninstallKey, registry.ENUMERATE_SUB_KEYS|view)
+	if errors.Is(err, registry.ErrNotExist) {
+		return notInstalled
+	}
+	if err != nil {
+		return unknown
+	}
+	defer root.Close()
+	names, err := root.ReadSubKeyNames(-1)
+	result := notInstalled
+	if err != nil {
+		result = unknown
+	}
+	for _, name := range names {
+		if ctx.Err() != nil {
+			return unknown
+		}
+		entry, err := registry.OpenKey(root, name, registry.QUERY_VALUE|view)
+		if err != nil {
+			result = unknown
+			continue
+		}
+		state := detectRegistryEntry(entry, rule)
+		entry.Close()
+		if state == installed {
+			return installed
+		}
+		if state == unknown {
+			result = unknown
+		}
+	}
+	return result
+}
+
+func detectRegistryEntry(entry registry.Key, rule Detection) DetectionState {
+	name, _, err := entry.GetStringValue("DisplayName")
+	if errors.Is(err, registry.ErrNotExist) {
+		return notInstalled
+	}
+	if err != nil {
+		return unknown
+	}
+	if !strings.EqualFold(clean(name, 240), rule.DisplayName) {
+		return notInstalled
+	}
+	version, _, err := entry.GetStringValue("DisplayVersion")
+	if errors.Is(err, registry.ErrNotExist) {
+		return notInstalled
+	}
+	if err != nil {
+		return unknown
+	}
+	if clean(version, 120) == rule.Version {
+		return installed
+	}
+	return notInstalled
 }
 
 func detectFile(rule Detection) (bool, error) {
 	path := rule.Path
-	if len(path) < 4 || path[1:3] != `:\` || strings.ContainsAny(path[2:], ":/") || filepath.Clean(path) != path ||
+	if len(path) < 4 || utf8.RuneCountInString(path) > 240 || strings.ContainsAny(path, "\x00<>\"|?*") || path[1:3] != `:\` ||
+		strings.ContainsAny(path[2:], ":/") || !filepath.IsLocal(path[3:]) || filepath.Clean(path) != path ||
 		windows.GetDriveType(windows.StringToUTF16Ptr(path[:3])) != windows.DRIVE_FIXED {
 		return false, fmt.Errorf("file detection requires a fixed local volume")
 	}
-	for parent := filepath.Dir(path); len(parent) > 3; parent = filepath.Dir(parent) {
-		if err := rejectReparse(parent, true); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return false, nil
-			}
+	parts := strings.Split(path[3:], `\`)
+	current := path[:3]
+	for index, part := range parts {
+		if part == "" || strings.TrimRight(part, ". ") != part || !filepath.IsLocal(part) {
+			return false, fmt.Errorf("invalid detection path component")
+		}
+		current = filepath.Join(current, part)
+		name, err := windows.UTF16PtrFromString(current)
+		if err != nil {
 			return false, err
 		}
-	}
-	if err := rejectReparse(path, false); err != nil {
+		// Keep ancestors and the file open without delete sharing during the resource query.
+		handle, err := windows.CreateFile(name, windows.FILE_READ_ATTRIBUTES,
+			windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING,
+			windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
-		return false, err
+		if err != nil {
+			return false, err
+		}
+		defer windows.CloseHandle(handle)
+		var info windows.ByHandleFileInformation
+		if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+			return false, err
+		}
+		isDirectory := info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0
+		if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 || isDirectory != (index < len(parts)-1) {
+			return false, fmt.Errorf("unexpected detection file type")
+		}
 	}
 	if rule.Kind == "file_exists" {
 		return true, nil

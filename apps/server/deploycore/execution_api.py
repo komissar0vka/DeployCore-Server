@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from . import job_schemas as wire
 from . import package_schemas as catalog
 from .device_api import AgentDevice
-from .job_api import ACTIVE, LEASE, attempt_for, clock, event, execution_enabled, get_view, last_attempt
+from .job_api import ACTIVE, GROUP_KINDS, LEASE, attempt_for, clock, detection_capable, event, execution_enabled, get_view, last_attempt
 from .job_models import DeploymentJob as Job, DeploymentTarget as Target
 from .models import User
 from .package_models import PackageArtifact, PackageDetectionRule, SoftwarePackage, SoftwareVersion, artifact_approved
@@ -31,7 +31,7 @@ class Manifest(wire.Wire):
     reboot_required: bool
 
 
-def permitted(db, device, target_id, attempt_id):
+def permitted(db, device, target_id, attempt_id, request):
     target, attempt = attempt_for(db, device, target_id, attempt_id)
     job = db.get_one(Job, target.job_id)
     now = clock(db)
@@ -46,13 +46,15 @@ def permitted(db, device, target_id, attempt_id):
     if (package.archived_at is not None or not artifact_approved(version, artifact)
             or job.artifact_sha256 != artifact.sha256):
         raise HTTPException(409, "deployment_version_unavailable")
-    return target, attempt, job, version, artifact, now
+    rule = db.get_one(PackageDetectionRule, version.id)
+    if rule.kind in GROUP_KINDS and not detection_capable(request, device):
+        raise HTTPException(409, "deployment_agent_incompatible")
+    return target, attempt, job, version, artifact, rule, now
 
 
 @router.get("/agent/{device_id}/jobs/{target_id}/manifest", tags=["Agent Execution"])
-def manifest(target_id: UUID, attempt_id: UUID, db: Db, device: AgentDevice) -> Manifest:
-    _, _, job, version, artifact, _ = permitted(db, device, target_id, attempt_id)
-    rule = db.get_one(PackageDetectionRule, version.id)
+def manifest(target_id: UUID, attempt_id: UUID, request: Request, db: Db, device: AgentDevice) -> Manifest:
+    _, _, job, version, artifact, rule, _ = permitted(db, device, target_id, attempt_id, request)
     result = Manifest(installer=version.installer, architecture=version.architecture, size_bytes=artifact.size_bytes,
                       sha256=artifact.sha256, args=version.uninstall_args if job.operation == "uninstall" else version.install_args,
                       detection={"kind": rule.kind, **rule.data}, timeout_seconds=version.timeout_seconds,
@@ -63,8 +65,8 @@ def manifest(target_id: UUID, attempt_id: UUID, db: Db, device: AgentDevice) -> 
 
 
 @router.get("/agent/{device_id}/jobs/{target_id}/artifact", tags=["Agent Execution"], response_class=FileResponse)
-def download(target_id: UUID, attempt_id: UUID, db: Db, device: AgentDevice):
-    _, _, _, version, artifact, _ = permitted(db, device, target_id, attempt_id)
+def download(target_id: UUID, attempt_id: UUID, request: Request, db: Db, device: AgentDevice):
+    _, _, _, version, artifact, _, _ = permitted(db, device, target_id, attempt_id, request)
     path = artifact_path(version.id)
     if not path.is_file() or path.stat().st_size != artifact.size_bytes:
         raise HTTPException(503, "package_storage_unavailable")
@@ -73,8 +75,8 @@ def download(target_id: UUID, attempt_id: UUID, db: Db, device: AgentDevice):
 
 
 @router.post("/agent/{device_id}/jobs/{target_id}/start", tags=["Agent Execution"])
-def start(target_id: UUID, data: wire.Lease, db: Db, device: AgentDevice) -> wire.LeaseReply:
-    target, attempt, _, _, _, now = permitted(db, device, target_id, data.attempt_id)
+def start(target_id: UUID, data: wire.Lease, request: Request, db: Db, device: AgentDevice) -> wire.LeaseReply:
+    target, attempt, _, _, _, _, now = permitted(db, device, target_id, data.attempt_id, request)
     attempt.started_at = now
     attempt.stage = "executing"
     attempt.lease_expires_at = now + LEASE
@@ -92,13 +94,19 @@ def resolve(job_id: UUID, target_id: UUID, data: wire.Resolve, request: Request,
     attempt = last_attempt(db, target.id)
     now = clock(db)
     if target.state not in ACTIVE or attempt is None or (
-        target.state != "unknown" and (target.state != "running" or attempt.lease_expires_at > now)
+        target.state != "unknown" and not (
+            (target.state == "running" and attempt.lease_expires_at <= now)
+            or (target.state == "awaiting_reboot" and attempt.reboot_deadline <= now)
+        )
     ):
         raise HTTPException(409, "deployment_resolution_unavailable")
     if attempt.finished_at is None:
         attempt.finished_at = now
         attempt.outcome = "unknown"
         attempt.diagnostic = "operator_resolved"
+    if target.state in ("unknown", "awaiting_reboot"):
+        if attempt.reboot_deadline is not None and attempt.reboot_finished_at is None:
+            attempt.reboot_finished_at = now
     target.state = "failed"
     event(db, target.job_id, "operator_resolved", target, attempt)
     audit(db, request, "deployment_resolved", actor=actor,
@@ -125,7 +133,7 @@ def retry(job_id: UUID, target_id: UUID, data: Retry, request: Request, db: Db, 
     if target.state != "failed":
         raise HTTPException(409, "deployment_retry_unavailable")
     attempt = last_attempt(db, target.id)
-    if attempt is not None and attempt.outcome == "unknown" and actor.role != "super_admin":
+    if attempt is not None and (attempt.outcome == "unknown" or (attempt.reboot_deadline is not None and attempt.reboot_detection in (None, "unknown"))) and actor.role != "super_admin":
         raise HTTPException(403, "permission_denied")
     job = db.get_one(Job, job_id)
     return create_job(wire.JobInput(version_id=job.version_id, mode=job.mode, operation=job.operation,
