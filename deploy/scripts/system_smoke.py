@@ -159,3 +159,8 @@ clear_managed_fixture_devices(check, admin_auth)
 exercise_license(check, login, compose, admin_auth)
 exercise_packages(check, login, sql, compose, base, context, admin_auth)
 exercise_agent_package(check, login, compose, base, context, settings["agent_url"], certificate)
+
+if count := os.environ.get("DEPLOYCORE_LOAD_COUNT"):
+    from agent_load import exercise_load
+
+    exercise_load(check, sql, compose, int(count), os.environ["DEPLOYCORE_LOAD_REPORT"])

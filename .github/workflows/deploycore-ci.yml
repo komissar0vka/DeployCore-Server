@@ -36,3 +36,24 @@ jobs:
           python -m pytest -q
       - name: Build and test PostgreSQL, FastAPI, React and Nginx over HTTPS
         run: deploy/scripts/smoke.sh
+  simulated-agents:
+    if: github.ref_name == 'beta5-validation'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        agents: [100, 500, 1000]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Measure authenticated agents against isolated Compose
+        env:
+          DEPLOYCORE_LOAD_COUNT: ${{ matrix.agents }}
+          DEPLOYCORE_LOAD_REPORT: ${{ runner.temp }}/agent-load.json
+        run: deploy/scripts/smoke.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agent-load-${{ matrix.agents }}
+          path: ${{ runner.temp }}/agent-load.json
+          if-no-files-found: ignore
