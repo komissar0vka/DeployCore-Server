@@ -58,10 +58,10 @@ previous_instance=$("${compose[@]}" exec -T db psql -U deploycore -d deploycore 
         ('f21540f5-7669-4cf2-83c9-dba111ac090f','Beta 3 fixture','DeployCore','Preserved catalog metadata', now())"
 "${compose[@]}" up -d --no-build --wait --wait-timeout 120
 test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT instance_name FROM installation_settings WHERE id=1")" = 'Pre-catalog instance'
-test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT version_num FROM alembic_version")" = '0012_deployment_batches'
+test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT version_num FROM alembic_version")" = '0013_portable_packages'
 test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT instance_id FROM license_state WHERE id=1")" = "$previous_instance"
 test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT description FROM software_packages WHERE name='Beta 3 fixture' AND category=''")" = 'Preserved catalog metadata'
-echo 'Upgrade through beta.3 to 0012 preserved settings, catalog data and license identity'
+echo 'Upgrade through beta.3 to 0013 preserved settings, catalog data and license identity'
 
 request --fail "$base/" > "$scratch/index.html"
 grep -q '<title>DeployCore' "$scratch/index.html"

@@ -18,6 +18,8 @@ import (
 const maxArtifactSize = 2 * 1024 * 1024 * 1024
 const diskReserve = 256 * 1024 * 1024
 
+var portableFolder = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9 _-]{0,62}[A-Za-z0-9])?$`)
+
 var hexDigest = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var msiProperty = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,71}=[^\x00-\x1f]*$`)
 
@@ -31,10 +33,13 @@ type Detection struct {
 	DisplayName   string      `json:"display_name"`
 	Path          string      `json:"path"`
 	Version       string      `json:"version"`
+	Folder        string      `json:"folder"`
+	Shortcut      bool        `json:"shortcut"`
 }
 
 type Manifest struct {
 	Installer       string    `json:"installer"`
+	PackageID       string    `json:"package_id"`
 	Architecture    string    `json:"architecture"`
 	Size            int64     `json:"size_bytes"`
 	Hash            string    `json:"sha256"`
@@ -65,11 +70,15 @@ type ExecutionHooks struct {
 type Executor func(context.Context, Assignment, Manifest, ExecutionHooks) (ExecutionResult, error)
 
 func (m Manifest) valid() bool {
-	if (m.Installer != "msi" && m.Installer != "exe") || (m.Architecture != "x64" && m.Architecture != "x86") ||
+	if (m.Installer != "msi" && m.Installer != "exe" && m.Installer != "portable") || (m.Architecture != "x64" && m.Architecture != "x86") ||
 		m.Size < 1 || m.Size > maxArtifactSize || !hexDigest.MatchString(m.Hash) ||
 		m.TimeoutSeconds < 1 || m.TimeoutSeconds > 86400 || len(m.Args) > 64 ||
 		len(m.SuccessCodes) < 1 || len(m.SuccessCodes) > 32 {
 		return false
+	}
+	if m.Installer == "portable" {
+		return deviceIDPattern.MatchString(m.PackageID) && m.Detection.Kind == "portable_file" &&
+			portableFolder.MatchString(m.Detection.Folder) && len(m.Args) == 0 && !m.RebootRequired
 	}
 	length := 0
 	for _, arg := range m.Args {

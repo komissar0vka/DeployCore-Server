@@ -163,7 +163,8 @@ def save_intake(intake_id: UUID, data: wire.IntakeSave, request: Request, db: Db
     if intake is None or intake.owner_id != actor.id or intake.expires_at <= datetime.now(UTC):
         raise HTTPException(404, "package_intake_expired")
     preview = wire.IntakeView.model_validate(intake.metadata_json)
-    if data.version.installer != preview.installer or data.version.architecture != preview.architecture:
+    expected = "exe" if data.version.installer == "portable" else data.version.installer
+    if expected != preview.installer or data.version.architecture != preview.architecture:
         raise HTTPException(422, "package_architecture_mismatch")
     package = SoftwarePackage(id=uuid4(), **data.package.model_dump())
     db.add(package)
@@ -480,7 +481,7 @@ def finalize_upload(package_id: UUID, version_id: UUID, filename: str, path, upl
 def validate_upload(db: Db, package_id: UUID, version_id: UUID, filename: str, replace: bool) -> tuple[str, str]:
     find_package(db, package_id)
     version = find_version(db, package_id, version_id)
-    if not filename.lower().endswith("." + version.installer):
+    if not filename.lower().endswith("." + ("exe" if version.installer == "portable" else version.installer)):
         raise HTTPException(422, "package_invalid_format")
     if not replace and db.get(PackageArtifact, version.id) is not None:
         raise HTTPException(409, "package_artifact_immutable")

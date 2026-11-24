@@ -28,6 +28,9 @@ func windowsExecutor(directory string) Executor {
 		if err := hooks.Stage("checking"); err != nil {
 			return ExecutionResult{}, err
 		}
+		if m.Installer == "portable" {
+			return applyPortable(ctx, directory, job, m, hooks)
+		}
 		observed := detectWindows(ctx, m.Detection)
 		if observed == unknown {
 			return ExecutionResult{Outcome: "failed", Diagnostic: "detection_failed", Detection: observed}, nil

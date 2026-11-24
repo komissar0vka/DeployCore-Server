@@ -13,12 +13,13 @@ interface Product extends ProductFields { id: string; can_deploy?: boolean }
 interface Artifact { filename: string; size_bytes: number; sha256: string; signature: 'verified' | 'unverified' }
 type DetectionLeaf = { kind: 'msi_product'; product_code: string } | { kind: 'registry_software'; display_name: string; version: string }
   | { kind: 'file_exists'; path: string } | { kind: 'file_version'; path: string; version: string }
-type Detection = DetectionLeaf | { kind: 'all'; schema_version: 1; rules: DetectionLeaf[] }
+type Portable = { kind: 'portable_file'; folder: string; shortcut: boolean }
+type Detection = DetectionLeaf | Portable | { kind: 'all'; schema_version: 1; rules: DetectionLeaf[] }
   | { kind: 'any'; schema_version: 1; rules: DetectionLeaf[] }
 interface VersionInput {
   version: string
   architecture: 'x64' | 'x86'
-  installer: 'msi' | 'exe'
+  installer: 'msi' | 'exe' | 'portable'
   min_windows_build: number | null
   install_args: string[]
   uninstall_args: string[] | null
@@ -94,11 +95,42 @@ function describeRule(rule: Detection, t: Translate): string {
     case 'registry_software': return `${rule.display_name} (${rule.version})`
     case 'file_version': return `${rule.path} (${rule.version})`
     case 'file_exists': return rule.path
+    case 'portable_file': return 'DeployCore Apps / ' + rule.folder
   }
 }
 
 function VersionDialog({ t, close, save, pending, error, initial }: {
   t: Translate; close: () => void; save: (body: VersionInput) => void; pending: boolean; error: unknown; initial?: Version
+}) {
+  if (initial?.installer === 'portable' && initial.detection.kind === 'portable_file') {
+    return <PortableVersionDialog initial={initial} t={t} close={close} save={save} pending={pending} error={error} />
+  }
+  return <InstallerVersionDialog initial={initial} t={t} close={close} save={save} pending={pending} error={error} />
+}
+
+function PortableVersionDialog({ initial, t, close, save, pending, error }: {
+  initial: Version; t: Translate; close: () => void; save: (body: VersionInput) => void; pending: boolean; error: unknown
+}) {
+  const rule = initial.detection as Portable
+  return <Dialog title={t('Версия Portable', 'Portable version')} close={close} closeLabel={t('Закрыть', 'Close')}>
+    <form className="grid gap-3" onSubmit={event => {
+      event.preventDefault()
+      const fields = new FormData(event.currentTarget)
+      const { version, architecture, installer, min_windows_build, timeout_seconds, success_codes } = initial
+      save({ version: String(fields.get('version') ?? version), architecture, installer, min_windows_build,
+        timeout_seconds, success_codes, install_args: [], uninstall_args: [], reboot_required: false,
+        detection: { ...rule, shortcut: fields.has('shortcut') } })
+    }}>
+      <Field name="version" label={t('Версия', 'Version')} required defaultValue={initial.version} maxLength={80} />
+      <PortableFields t={t} initial={rule} />
+      <FormError message={error ? errorMessage(error, t) : null} />
+      <Action type="submit" disabled={pending}>{t('Сохранить', 'Save')}</Action>
+    </form>
+  </Dialog>
+}
+
+function InstallerVersionDialog({ initial, t, close, save, pending, error }: {
+  initial?: Version; t: Translate; close: () => void; save: (body: VersionInput) => void; pending: boolean; error: unknown
 }) {
   const rule = initial?.detection
   const initialGroup = rule && 'rules' in rule ? rule : undefined
@@ -149,7 +181,7 @@ function VersionDialog({ t, close, save, pending, error, initial }: {
           <option value="any">{t('Любое правило', 'Any rule')}</option>
         </select>
       </label>
-      {Array.from({ length: group === 'single' ? 1 : ruleCount }, (_, index) => <DetectionFields key={index} index={index} t={t} initial={initialGroup?.rules[index] ?? (index === 0 && rule && !('rules' in rule) ? rule : undefined)} />)}
+      {Array.from({ length: group === 'single' ? 1 : ruleCount }, (_, index) => <DetectionFields key={index} index={index} t={t} initial={initialGroup?.rules[index] ?? (index === 0 && rule && !('rules' in rule) && rule.kind !== 'portable_file' ? rule : undefined)} />)}
       {group !== 'single' && <div className="flex flex-wrap gap-2">
         <Action type="button" secondary disabled={ruleCount >= 8} onClick={() => setRuleCount(ruleCount + 1)}>{t('Добавить правило', 'Add rule')}</Action>
         <Action type="button" secondary disabled={ruleCount <= 2} onClick={() => setRuleCount(ruleCount - 1)}>{t('Удалить последнее правило', 'Remove last rule')}</Action>
@@ -185,7 +217,7 @@ function UploadForm({ path, installer, csrf, t, uploaded, replace = false }: {
     }
   }
   return <form className="grid gap-2" onSubmit={submit}>
-    <Field type="file" name="file" accept={'.' + installer} label={t('Установщик', 'Installer')} required disabled={!!controller} />
+    <Field type="file" name="file" accept={installer === 'portable' ? '.exe' : '.' + installer} label={t('Установщик', 'Installer')} required disabled={!!controller} />
     <div className="flex flex-wrap gap-2">
       <Action type="submit" disabled={!!controller}>{replace ? t('Заменить и проверить', 'Replace and verify') : t('Загрузить и проверить', 'Upload and verify')}</Action>
       {controller && <Action secondary onClick={() => controller.abort()}>{t('Отменить загрузку', 'Cancel upload')}</Action>}
@@ -383,7 +415,7 @@ function ProductDetails({ id, back, session, t, deploy, selectedPackage }: Props
                 </Action>
                 {version.editable && <Action secondary onClick={() => { remove.reset(); setDeletingVersion(version) }}>{t('Удалить версию', 'Delete version')}</Action>}
                 {version.editable && version.artifact && <Action secondary onClick={() => setReplacingVersion(version)}>{t('Заменить файл', 'Replace file')}</Action>}
-                <Action secondary onClick={() => setPreview(version.id)}>{t('Проверить обнаружение', 'Preview detection')}</Action>
+                {version.installer !== 'portable' && <Action secondary onClick={() => setPreview(version.id)}>{t('Проверить обнаружение', 'Preview detection')}</Action>}
               </div>}
               {version.artifact ? <div className="grid gap-2 text-sm">
                 <span className="break-all">{version.artifact.filename} · {(version.artifact.size_bytes / 1048576).toFixed(2)} MiB</span>
@@ -454,6 +486,15 @@ function ProductDetails({ id, back, session, t, deploy, selectedPackage }: Props
   </div>
 }
 
+function PortableFields({ t, initial }: { t: Translate; initial?: Portable }) {
+  return <>
+    <Field name="portable_folder" label={t('Каталог в Program Files / DeployCore Apps', 'Folder under Program Files / DeployCore Apps')}
+      required maxLength={64} readOnly={!!initial} defaultValue={initial?.folder} pattern={String.raw`[A-Za-z0-9]([A-Za-z0-9 _\-]{0,62}[A-Za-z0-9])?`} />
+    <label className="text-sm"><input name="shortcut" type="checkbox" defaultChecked={initial?.shortcut ?? true} />{' '}
+      {t('Создать ярлык в меню «Пуск»', 'Create a Start menu shortcut')}</label>
+  </>
+}
+
 interface Intake extends Artifact {
   id: string
   installer: VersionInput['installer']
@@ -472,6 +513,7 @@ function IntakeDialog({ session, t, close, saved }: Props & { close: () => void;
   const [operation, setOperation] = useState<AbortController>()
   const [progress, setProgress] = useState(0)
   const [problem, setProblem] = useState('')
+  const [portable, setPortable] = useState(false)
   const [overrideDetection, setOverrideDetection] = useState(false)
   useEffect(() => () => operation?.abort(), [operation])
   const create = useMutation({
@@ -489,6 +531,7 @@ function IntakeDialog({ session, t, close, saved }: Props & { close: () => void;
     const controller = new AbortController()
     create.reset()
     setPreview(undefined)
+    setPortable(false)
     setOverrideDetection(false)
     setProblem('')
     setProgress(0)
@@ -511,14 +554,14 @@ function IntakeDialog({ session, t, close, saved }: Props & { close: () => void;
     const args = (name: string) => read(name).split(/\r?\n/).filter(Boolean)
     const name = read('name')
     const version = read('version')
-    const detection: Detection = overrideDetection ? readLeaf(read, 0)
+    const detection: Detection = portable ? { kind: 'portable_file', folder: read('portable_folder'), shortcut: fields.has('shortcut') } : overrideDetection ? readLeaf(read, 0)
       : preview.product_code ? { kind: 'msi_product', product_code: preview.product_code }
       : { kind: 'registry_software', display_name: name, version }
     create.mutate({
       package: { name, publisher: read('publisher'), description: read('description'), category: read('category') },
       version: {
-        version, architecture: preview.architecture, installer: preview.installer, detection,
-        install_args: args('install'), uninstall_args: fields.has('remove') ? args('uninstall') : null,
+        version, architecture: preview.architecture, installer: portable ? 'portable' : preview.installer, detection,
+        install_args: portable ? [] : args('install'), uninstall_args: portable ? [] : fields.has('remove') ? args('uninstall') : null,
         min_windows_build: null, timeout_seconds: 1800, success_codes: [0, 3010], reboot_required: false,
       },
     })
@@ -555,11 +598,15 @@ function IntakeDialog({ session, t, close, saved }: Props & { close: () => void;
             pattern={String.raw`[A-Za-z0-9][A-Za-z0-9._+\-]*`} defaultValue={preview.version?.replace(/,\s*/g, '.') ?? ''} />
         </div>
         <Field name="category" label={t('Категория', 'Category')} maxLength={160} />
+        {preview.installer === 'exe' && <label className="text-sm"><input type="checkbox" checked={portable}
+          onChange={event => setPortable(event.target.checked)} />{' '}{t('Программа Portable', 'Portable program')}</label>}
+        {portable && <PortableFields t={t} />}
         <details className="rounded-lg border border-border p-3">
           <summary className="cursor-pointer font-medium">{t('Дополнительно', 'Advanced')}</summary>
           <div className="mt-3 grid gap-3">
             <code className="break-all text-xs">SHA-256 {preview.sha256}</code>
             <label className="grid gap-2 text-sm">{t('Описание', 'Description')}<textarea name="description" className="input" maxLength={4000} /></label>
+            {!portable && <>
             <label className="grid gap-2 text-sm">{t('Аргументы установки, по одному в строке', 'Installation arguments, one per line')}
               <textarea name="install" className="input" defaultValue={preview.install_args.join('\n')} maxLength={12000} />
             </label>
@@ -571,9 +618,10 @@ function IntakeDialog({ session, t, close, saved }: Props & { close: () => void;
               : t('По умолчанию проверяются имя и версия в реестре Windows.', 'Detection uses the Windows registry name and version by default.')}</p>
             <label className="text-sm"><input type="checkbox" checked={overrideDetection} onChange={event => setOverrideDetection(event.target.checked)} /> {t('Указать своё правило обнаружения', 'Set a custom detection rule')}</label>
             {overrideDetection && <DetectionFields index={0} t={t} />}
+            </>}
           </div>
         </details>
-        {preview.installer === 'exe' && <p className="text-sm text-muted-foreground">
+        {preview.installer === 'exe' && !portable && <p className="text-sm text-muted-foreground">
           {preview.install_args.length
             ? t('Проверь предложенные аргументы установки в разделе «Дополнительно».', 'Review the suggested installation arguments under Advanced.')
             : t('Для этого EXE параметры тихой установки не определены. Уточни их у производителя.', 'Silent installation arguments could not be determined. Check with the publisher.')}

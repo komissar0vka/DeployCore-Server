@@ -5681,6 +5681,18 @@
           "reboot_required": {
             "type": "boolean",
             "title": "Reboot Required"
+          },
+          "package_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Package Id"
           }
         },
         "additionalProperties": false,
@@ -7334,7 +7346,8 @@
             "type": "string",
             "enum": [
               "msi",
-              "exe"
+              "exe",
+              "portable"
             ],
             "title": "Installer"
           },
@@ -7463,7 +7476,8 @@
             "type": "string",
             "enum": [
               "msi",
-              "exe"
+              "exe",
+              "portable"
             ],
             "title": "Installer"
           },

@@ -8,7 +8,15 @@
       <RegistrySearch Id="ExistingService" Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\DeployCoreAgent"
                       Name="ImagePath" Type="raw" Win64="yes"/>
     </Property>
-    <Condition Message="DeployCore Agent is already installed. Retain the existing installation or remove it before installing this package.">Installed OR NOT EXISTINGDEPLOYCORESERVICE</Condition>
+    <Upgrade Id="AACB9A3E-8675-4FEB-9063-E53D0ACA5122">
+      <UpgradeVersion Maximum="$(var.Version)" IncludeMaximum="no" Property="OLDERDEPLOYCOREMSI"/>
+      <UpgradeVersion Minimum="$(var.Version)" IncludeMinimum="yes" OnlyDetect="yes" Property="CURRENTORNEWERDEPLOYCOREMSI"/>
+    </Upgrade>
+    <Condition Message="An equal or newer DeployCore managed MSI is installed.">Installed OR NOT CURRENTORNEWERDEPLOYCOREMSI</Condition>
+    <Condition Message="A legacy DeployCore service exists. Run the DeployCore migration utility to preserve enrollment.">Installed OR OLDERDEPLOYCOREMSI OR NOT EXISTINGDEPLOYCORESERVICE</Condition>
+    <InstallExecuteSequence>
+      <RemoveExistingProducts After="InstallInitialize">OLDERDEPLOYCOREMSI</RemoveExistingProducts>
+    </InstallExecuteSequence>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
         <Directory Id="ManagedAgentDirectory" Name="DeployCore Managed Agent">

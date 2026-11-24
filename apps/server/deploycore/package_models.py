@@ -32,7 +32,7 @@ class SoftwareVersion(Base):
             name="package_approval",
         ),
         CheckConstraint("architecture IN ('x64', 'x86')", name="package_architecture"),
-        CheckConstraint("installer IN ('msi', 'exe')", name="package_installer"),
+        CheckConstraint("installer IN ('msi', 'exe', 'portable')", name="package_installer"),
         CheckConstraint("timeout_seconds BETWEEN 1 AND 86400", name="package_timeout"),
         CheckConstraint("min_windows_build IS NULL OR min_windows_build > 0", name="package_os_build"),
     )
@@ -42,7 +42,7 @@ class SoftwareVersion(Base):
     version: Mapped[str] = mapped_column(String(80))
     revision: Mapped[int] = mapped_column(server_default="1")
     architecture: Mapped[str] = mapped_column(String(3))
-    installer: Mapped[str] = mapped_column(String(3))
+    installer: Mapped[str] = mapped_column(String(8))
     min_windows_build: Mapped[int | None]
     install_args: Mapped[list[str]] = mapped_column(JSONB)
     uninstall_args: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True))
@@ -58,7 +58,7 @@ class SoftwareVersion(Base):
 class PackageDetectionRule(Base):
     __tablename__ = "package_detection_rules"
     __table_args__ = (
-        CheckConstraint("kind IN ('msi_product','registry_software','file_exists','file_version','all','any')", name="package_detection_kind"),
+        CheckConstraint("kind IN ('msi_product','registry_software','file_exists','file_version','all','any','portable_file')", name="package_detection_kind"),
     )
 
     version_id: Mapped[UUID] = mapped_column(ForeignKey("software_versions.id"), primary_key=True)

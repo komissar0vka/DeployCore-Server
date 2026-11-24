@@ -42,6 +42,10 @@ def agent_capabilities(request: Request) -> set[str]:
     return {item.strip() for item in request.headers.get("x-deploycore-capabilities", "").split(",")}
 
 
+def portable_capable(request: Request, device: Device) -> bool:
+    return supports_execution(device.agent_version, (0, 3, 8)) and "portable_v1" in agent_capabilities(request)
+
+
 def detection_capable(request: Request, device: Device) -> bool:
     return supports_execution(device.agent_version, (0, 3, 5)) and "detection_v1" in agent_capabilities(request)
 
@@ -173,7 +177,9 @@ def stage_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) ->
             raise HTTPException(409, "deployment_execution_disabled")
         rule = db.get_one(PackageDetectionRule, data.version_id)
         validate_execution(version, rule, data.operation)
-        if rule.kind in GROUP_KINDS:
+        if version.installer == "portable":
+            minimum_agent = (0, 3, 8)
+        elif rule.kind in GROUP_KINDS:
             minimum_agent = (0, 3, 5)
     if data.mode == "execute_v1" and not all(supports_execution(agent_version, minimum_agent) for _, agent_version in devices):
         raise HTTPException(422, "deployment_agent_incompatible")
@@ -353,6 +359,7 @@ def assignment(db: Db, target: Target, attempt: Attempt) -> wire.PollReply:
 def poll(request: Request, db: Db, device: AgentDevice) -> wire.PollReply:
     execute = execution_enabled() and supports_execution(device.agent_version) and "execute_v1" in agent_capabilities(request)
     extended = detection_capable(request, device)
+    portable = portable_capable(request, device)
     # require_agent serializes requests for this device. The unique partial index is a second line of defense.
     active = db.scalar(select(Target).where(Target.device_id == device.id, Target.state.in_(ACTIVE)).with_for_update())
     if active is not None:
@@ -370,7 +377,9 @@ def poll(request: Request, db: Db, device: AgentDevice) -> wire.PollReply:
         if attempt.lease_expires_at > now:
             job = db.get_one(Job, active.job_id)
             if job.mode == "execute_v1" and (
-                not execute or (not extended and db.get_one(PackageDetectionRule, job.version_id).kind in GROUP_KINDS)
+                not execute
+                or (not portable and db.get_one(SoftwareVersion, job.version_id).installer == "portable")
+                or (not extended and db.get_one(PackageDetectionRule, job.version_id).kind in GROUP_KINDS)
             ):
                 db.commit()
                 return wire.PollReply()
@@ -385,6 +394,7 @@ def poll(request: Request, db: Db, device: AgentDevice) -> wire.PollReply:
         select(Target).join(Job, Job.id == Target.job_id)
         .where(Target.device_id == device.id, Target.state == "queued", Job.mode.in_(("transport_only", "execute_v1") if execute else ("transport_only",)))
         .join(PackageDetectionRule, PackageDetectionRule.version_id == Job.version_id)
+        .where(or_(Job.mode == "transport_only", PackageDetectionRule.kind != "portable_file") if not portable else True)
         .where(or_(Job.not_before.is_(None), Job.not_before <= func.now()))
         .where(or_(Job.mode == "transport_only", PackageDetectionRule.kind.not_in(GROUP_KINDS)) if not extended else True)
         .order_by(func.coalesce(Job.not_before, Job.created_at), Job.id).limit(1).with_for_update(of=Target)

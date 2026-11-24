@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from . import job_schemas as wire
 from . import package_schemas as catalog
 from .device_api import AgentDevice
-from .job_api import ACTIVE, GROUP_KINDS, LEASE, attempt_for, clock, detection_capable, event, execution_enabled, get_view, last_attempt, retry_requires_admin
+from .job_api import ACTIVE, GROUP_KINDS, LEASE, attempt_for, clock, detection_capable, event, execution_enabled, get_view, last_attempt, portable_capable, retry_requires_admin
 from .job_models import DeploymentJob as Job, DeploymentTarget as Target
 from .models import User
 from .package_models import PackageArtifact, PackageDetectionRule, SoftwarePackage, SoftwareVersion, artifact_approved
@@ -29,6 +29,7 @@ class Manifest(wire.Wire):
     success_codes: list[int]
     min_windows_build: int | None
     reboot_required: bool
+    package_id: UUID | None = None
 
 
 def permitted(db, device, target_id, attempt_id, request):
@@ -47,6 +48,8 @@ def permitted(db, device, target_id, attempt_id, request):
             or job.artifact_sha256 != artifact.sha256):
         raise HTTPException(409, "deployment_version_unavailable")
     rule = db.get_one(PackageDetectionRule, version.id)
+    if version.installer == "portable" and not portable_capable(request, device):
+        raise HTTPException(409, "deployment_agent_incompatible")
     if rule.kind in GROUP_KINDS and not detection_capable(request, device):
         raise HTTPException(409, "deployment_agent_incompatible")
     return target, attempt, job, version, artifact, rule, now
@@ -59,7 +62,7 @@ def manifest(target_id: UUID, attempt_id: UUID, request: Request, db: Db, device
                       sha256=artifact.sha256, args=version.uninstall_args if job.operation == "uninstall" else version.install_args,
                       detection={"kind": rule.kind, **rule.data}, timeout_seconds=version.timeout_seconds,
                       success_codes=version.success_codes, min_windows_build=version.min_windows_build,
-                      reboot_required=version.reboot_required)
+                      reboot_required=version.reboot_required, package_id=version.package_id if version.installer == "portable" else None)
     db.commit()
     return result
 

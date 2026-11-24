@@ -60,7 +60,7 @@ type JobTransport struct {
 
 func (t *JobTransport) capabilities() string {
 	if t.detect != nil {
-		return "execute_v1, detection_v1, closed_result_v1"
+		return "execute_v1, detection_v1, closed_result_v1, portable_v1"
 	}
 	if t.execute != nil {
 		return "execute_v1"

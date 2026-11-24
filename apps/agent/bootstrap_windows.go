@@ -57,10 +57,7 @@ func loadMSIState(directory string) (State, error) {
 	} else if state.Server != config.Server {
 		return State{}, fmt.Errorf("saved registration uses a different server")
 	}
-	if state.PendingToken != "" {
-		state.PendingToken = config.Token
-		state.CA = []byte(config.CA)
-	}
+
 	if err := saveState(directory, state); err != nil {
 		return State{}, err
 	}

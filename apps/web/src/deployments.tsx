@@ -130,7 +130,7 @@ function NewJob({ session, t, close, created, preset }: Props & { close: () => v
   const eligible = (versions.data?.versions ?? []).filter(version => version.approved_at && (operation === 'install' || version.uninstall_args !== null))
   const chosen = eligible.find(version => version.id === versionId) ?? (eligible.length === 1 ? eligible[0] : undefined)
   const plans = batchMode ? batchChoices.flatMap(choice => choice.chosen ? [choice.chosen] : []) : chosen ? [chosen] : []
-  const minimumPatch = plans.some(version => version.detection.kind === 'all' || version.detection.kind === 'any') ? 5 : 4
+  const minimumPatch = plans.some(version => version.installer === 'portable') ? 8 : plans.some(version => version.detection.kind === 'all' || version.detection.kind === 'any') ? 5 : 4
   const compatibleSelection = mode !== 'execute_v1' || [...selected.values()].every(device => !device.agent_version || compatible(device.agent_version, minimumPatch))
   const canSubmit = compatibleSelection && plans.length === (batchMode ? batchPrograms.length : 1) && selected.size > 0 && (mode !== 'execute_v1' || operation !== 'uninstall' || session.user.role === 'super_admin')
   const mutation = useMutation({

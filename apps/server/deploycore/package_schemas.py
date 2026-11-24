@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import Field, StringConstraints, field_validator
+from pydantic import Field, StringConstraints, field_validator, model_validator
 
 from .device_schemas import Wire
 
@@ -60,6 +60,19 @@ class FileVersion(Wire):
     version: Annotated[str, StringConstraints(pattern=r"^[0-9]{1,5}(\.[0-9]{1,5}){3}$")]
 
 
+class PortableFile(Wire):
+    kind: Literal["portable_file"]
+    folder: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9]([A-Za-z0-9 _-]{0,62}[A-Za-z0-9])?$")]
+    shortcut: bool = True
+
+    @field_validator("folder")
+    @classmethod
+    def safe_folder(cls, folder):
+        if folder.upper() in {"CON", "PRN", "AUX", "NUL", *(f"{prefix}{number}" for prefix in ("COM", "LPT") for number in range(10))}:
+            raise ValueError("reserved Windows folder")
+        return folder
+
+
 DetectionLeaf = Annotated[MSIProduct | RegistrySoftware | FileExists | FileVersion, Field(discriminator="kind")]
 
 
@@ -77,7 +90,7 @@ DetectionState = Literal["installed", "not_installed", "unknown"]
 class VersionInput(Wire):
     version: Annotated[str, StringConstraints(strip_whitespace=True, max_length=80, pattern=r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")]
     architecture: Literal["x64", "x86"]
-    installer: Literal["msi", "exe"]
+    installer: Literal["msi", "exe", "portable"]
     min_windows_build: Annotated[int, Field(strict=True, ge=1, le=2**31 - 1)] | None = None
     install_args: Annotated[list[Arg], Field(max_length=64)] = Field(default_factory=list)
     uninstall_args: Annotated[list[Arg], Field(max_length=64)] | None = None
@@ -85,6 +98,14 @@ class VersionInput(Wire):
     timeout_seconds: Annotated[int, Field(strict=True, ge=1, le=86400)] = 1800
     success_codes: Annotated[list[ExitCode], Field(min_length=1, max_length=32)] = Field(default_factory=lambda: [0, 3010])
     reboot_required: bool = False
+
+    @model_validator(mode="after")
+    def portable_settings(self):
+        if (self.installer == "portable") != (self.detection.kind == "portable_file"):
+            raise ValueError("Portable requires a managed destination")
+        if self.installer == "portable" and (self.install_args or self.uninstall_args or self.reboot_required):
+            raise ValueError("Portable uses file operations without process arguments")
+        return self
 
     @field_validator("success_codes")
     @classmethod
