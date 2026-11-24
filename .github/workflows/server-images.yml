@@ -49,7 +49,7 @@ jobs:
           bundle="$RUNNER_TEMP/deploycore-server"
           mkdir -p "$bundle" "$RUNNER_TEMP/release"
           git archive HEAD -- install.sh README.md CHANGELOG.md apps/agent apps/server apps/web \
-            deploy/compose.yaml deploy/.env.example deploy/Dockerfile.web deploy/Dockerfile.web.dockerignore \
+            deploy/compose.yaml deploy/compose.job-signing.yaml deploy/.env.example deploy/Dockerfile.web deploy/Dockerfile.web.dockerignore \
             deploy/nginx deploy/scripts packages/api-contract packages/licensing-contract \
             docs/releases/client-install.md | tar -xf - -C "$bundle"
           server=$(jq -er '."containerimage.digest"' /tmp/server-image.json)
