@@ -12,7 +12,7 @@ permissions:
 jobs:
   images:
     if: github.repository == 'komissar0vka/DeployCore-Server' && (github.ref_type == 'tag' || github.ref_name == 'beta4-validation')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5

@@ -9,6 +9,7 @@ import stat
 import subprocess
 import tarfile
 import time
+from threading import Thread
 from pathlib import Path
 from uuid import UUID
 
@@ -92,11 +93,24 @@ def process(path):
     status(request, "completed")
 
 
+def heartbeat():
+    path = OUTBOX / "heartbeat"
+    while True:
+        try:
+            path.touch()
+        except OSError:
+            pass
+        time.sleep(2)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     os.umask(0o077)
+    (OUTBOX / "heartbeat").touch()
+    if not args.once:
+        Thread(target=heartbeat, daemon=True).start()
     queue = INBOX / "request.json"
     running = ROOT / "running.json"
     if running.exists() or running.is_symlink():

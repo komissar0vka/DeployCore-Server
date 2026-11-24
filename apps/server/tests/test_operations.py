@@ -17,6 +17,7 @@ def test_mailbox_exposes_progress_and_backup_metadata(monkeypatch, tmp_path):
     (tmp_path / "inbox").mkdir()
     outbox = tmp_path / "outbox"
     outbox.mkdir()
+    (outbox / "heartbeat").touch()
     id = uuid4()
     (outbox / "status.json").write_text(json.dumps({"id": str(id), "action": "backup", "stage": "completed"}))
     (outbox / f"{id}.tar.gz").write_bytes(b"test backup")

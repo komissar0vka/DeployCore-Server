@@ -1,6 +1,7 @@
 """Restricted mailbox for the host backup and update service."""
 import json
 import os
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -52,9 +53,10 @@ class OperationsView(Wire):
 
 def view() -> OperationsView:
     inbox, outbox = ROOT / "inbox", ROOT / "outbox"
-    available = inbox.is_dir() and outbox.is_dir()
-    if not available:
-        return OperationsView(available=False, status=None, backups=[])
+    try:
+        available = inbox.is_dir() and time.time() - (outbox / "heartbeat").stat().st_mtime <= 15
+    except OSError:
+        available = False
     status = None
     for stage_file, queued in [(inbox / "request.json", True), (outbox / "status.json", False)]:
         try:
@@ -73,7 +75,7 @@ def view() -> OperationsView:
         except (OSError, ValueError):
             continue
         backups.append(Backup(id=id, bytes=metadata.st_size, created_at=datetime.fromtimestamp(metadata.st_mtime, UTC)))
-    return OperationsView(available=True, status=status, backups=sorted(backups, key=lambda item: item.created_at, reverse=True))
+    return OperationsView(available=available, status=status, backups=sorted(backups, key=lambda item: item.created_at, reverse=True))
 
 
 @router.get("")
