@@ -152,3 +152,40 @@ jobs:
         env:
           OUTCOMES: ${{ steps.python.outcome }} ${{ steps.npm.outcome }} ${{ steps.go.outcome }} ${{ steps.secrets.outcome }} ${{ steps.backend.outcome }} ${{ steps.web.outcome }}
         run: test "$OUTCOMES" = "success success success success success success"
+  beta4-upgrade:
+    if: github.ref_name == 'beta5-validation'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Boot the exact public beta.4 release
+        run: |
+          archive="$RUNNER_TEMP/beta4.tar.gz"
+          base=https://github.com/komissar0vka/DeployCore-Releases/releases/download/v1.0.0-beta.4
+          curl -fsSL --retry 3 "$base/deploycore-server-1.0.0-beta.4.tar.gz" -o "$archive"
+          printf '%s  %s\n' 5f1cfb93c4777a05450e06da8caf7f738307984bdaf39d8775c581fc40f7fa3c "$archive" | sha256sum -c -
+          mkdir "$RUNNER_TEMP/beta4"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/beta4"
+          export DEPLOYCORE_HTTPS_BIND=127.0.0.1
+          printf '127.0.0.1\n18449\n\n' |
+            sudo --preserve-env=DEPLOYCORE_HTTPS_BIND bash "$RUNNER_TEMP/beta4/install.sh"
+      - name: Build the beta.5 candidate on the runner
+        run: |
+          set -euo pipefail
+          docker build -f apps/server/Dockerfile -t deploycore-upgrade-backend:ci .
+          docker build -f deploy/Dockerfile.web -t deploycore-upgrade-web:ci .
+          root="$RUNNER_TEMP/candidate"
+          mkdir -p "$root" "$RUNNER_TEMP/beta5"
+          git archive HEAD -- install.sh apps/server/Dockerfile deploy/Dockerfile.web deploy/compose.yaml | tar -x -C "$root"
+          server=$(docker image inspect --format '{{.Id}}' deploycore-upgrade-backend:ci)
+          web=$(docker image inspect --format '{{.Id}}' deploycore-upgrade-web:ci)
+          jq -n --arg server "$server" --arg web "$web" '{$server,$web}' >"$root/deploy/release-image-ids.json"
+          jq -n --arg server "ghcr.io/komissar0vka/deploycore-server-backend@$server" \
+             --arg web "ghcr.io/komissar0vka/deploycore-server-web@$web" '{$server,$web}' >"$root/deploy/release-images.json"
+          docker save "$server" "$web" | gzip -1 >"$root/deploy/release-images.tar.gz"
+          tar -czf "$RUNNER_TEMP/beta5/candidate.tar.gz" -C "$root" .
+          (cd "$RUNNER_TEMP/beta5" && sha256sum candidate.tar.gz > SHA256SUMS)
+      - name: Verify data retention and rollback on failed candidate startup
+        run: |
+          sudo python3 deploy/scripts/ci-upgrade-server.py "$RUNNER_TEMP/beta4" \
+            "$RUNNER_TEMP/beta5/candidate.tar.gz" https://127.0.0.1:18449 1.0.0-beta.4 1.0.0-beta.5

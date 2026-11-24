@@ -1,4 +1,4 @@
-"""Verify a beta.3 instance using the release updater and a hosted registry bundle."""
+"""Verify an existing instance with the release updater and a hosted bundle."""
 import hashlib
 import http.cookiejar
 import importlib.util
@@ -16,6 +16,7 @@ from uuid import uuid4
 root = Path(sys.argv[1])
 artifact = Path(sys.argv[2])
 origin = sys.argv[3]
+old_version, new_version = sys.argv[4:] if len(sys.argv) > 4 else ("1.0.0-beta.3", "1.0.0-beta.4")
 os.environ["DEPLOYCORE_INSTALL_ROOT"] = str(root)
 spec = importlib.util.spec_from_file_location("release_updater", Path(__file__).with_name("update-server.py"))
 updater = importlib.util.module_from_spec(spec)
@@ -39,10 +40,10 @@ def call(path, data=None, secret=None):
 
 
 assert call("/setup")["configured"] is False
-call("/setup", {**credentials, "organization": "Beta.3 data", "instance_name": "Keep upgrade fixture",
+call("/setup", {**credentials, "organization": "Upgrade fixture organization", "instance_name": "Keep upgrade fixture",
                 "agent_url": origin, "setup_token": token})
 csrf = call("/auth/login", credentials)["csrf_token"]
-assert call("/settings")["version"] == "1.0.0-beta.3"
+assert call("/settings")["version"] == old_version
 license_ = call("/licenses")
 package = call("/packages", {"name":"Upgrade fixture","publisher":"CI","description":"Keep this record"}, csrf)
 registration = call("/enrollment-tokens", {"label":"Upgrade fixture","max_uses":1}, csrf)["token"]
@@ -71,19 +72,19 @@ def fail_start(*args, override=None, **kwargs):
 
 updater.compose = fail_start
 try:
-    updater.install("beta", "1.0.0-beta.4")
+    updater.install("beta", new_version)
 except subprocess.CalledProcessError as exc:
     assert exc.returncode == 79, exc
 else:
     raise AssertionError("Candidate failure was not exercised")
-assert call("/settings")["version"] == "1.0.0-beta.3"
+assert call("/settings")["version"] == old_version
 assert call("/settings")["instance_name"] == "Keep upgrade fixture"
 
 updater.compose = compose
-updater.install("beta", "1.0.0-beta.4")
-assert call("/settings")["version"] == "1.0.0-beta.4"
-assert call("/settings")["organization"] == "Beta.3 data"
+updater.install("beta", new_version)
+assert call("/settings")["version"] == new_version
+assert call("/settings")["organization"] == "Upgrade fixture organization"
 assert call("/licenses")["instance_id"] == license_["instance_id"]
 assert any(item["id"] == device for item in call("/devices")["items"])
 assert call("/packages/" + package["id"])["description"] == "Keep this record"
-print("Beta.3 upgrade using GHCR images preserved settings, signup, license UUID, device and package; forced rollback restored the previous database")
+print(f"{old_version} → {new_version} preserved settings, license UUID, device and package; forced rollback restored the previous database")
