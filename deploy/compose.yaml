@@ -20,6 +20,8 @@ services:
     restart: unless-stopped
 
   server:
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     build:
       context: ..
       dockerfile: apps/server/Dockerfile

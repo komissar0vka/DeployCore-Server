@@ -11,15 +11,19 @@ ADD --checksum=sha256:109c711ac07fc2ce1e3756d6247d92bbf23e55c4aa809a4b34cca3c4f2
     https://github.com/mtrojnar/osslsigncode/releases/download/2.16/osslsigncode-2.16-linux-amd64.tar.gz /tmp/osslsigncode.tar.gz
 RUN mkdir /out && tar -xzf /tmp/osslsigncode.tar.gz -C /out --strip-components=1
 
-FROM python:3.12-slim-trixie
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-WORKDIR /app
+FROM python:3.12-alpine3.24 AS dependencies
+WORKDIR /build
 COPY apps/server/requirements.txt .
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssl msitools wixl \
-    && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install --no-cache-dir -r requirements.txt \
-    && useradd --system --uid 10001 deploycore \
+RUN python -m pip install --only-binary=:all: --no-cache-dir --target /opt/deploycore/python -r requirements.txt
+
+FROM python:3.12-alpine3.24
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/opt/deploycore/python
+WORKDIR /app
+RUN apk add --no-cache ca-certificates openssl msitools \
+    && addgroup -S -g 10001 deploycore \
+    && adduser -S -D -H -u 10001 -G deploycore deploycore \
     && install -d -m 0700 -o deploycore /var/lib/deploycore/packages /var/lib/deploycore/cloud
+COPY --from=dependencies /opt/deploycore/python /opt/deploycore/python
 COPY --from=authenticode /out/osslsigncode /usr/local/bin/osslsigncode
 COPY --from=authenticode /out/COPYING.txt /out/LICENSE.txt /usr/local/share/doc/osslsigncode/
 COPY --from=agent /out/deploycore-agent.exe /opt/deploycore/agent/
