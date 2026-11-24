@@ -7,11 +7,29 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $msiFile = (Resolve-Path -LiteralPath $Msi).ProviderPath
-if ([IO.Path]::GetExtension($msiFile) -ne '.msi' -or (Get-FileHash -LiteralPath $msiFile).Hash -ne $Sha256) {
+$hasher = [Security.Cryptography.SHA256]::Create()
+$source = [IO.File]::OpenRead($msiFile)
+try {
+    $actualHash = [BitConverter]::ToString($hasher.ComputeHash($source)).Replace('-', '')
+} finally {
+    $source.Dispose()
+    $hasher.Dispose()
+}
+if ([IO.Path]::GetExtension($msiFile) -ne '.msi' -or $actualHash -ne $Sha256) {
     throw 'MSI checksum does not match the approved SHA-256.'
 }
 $serviceName = 'DeployCoreAgent'
-$registered = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
+function Read-DeployCoreService {
+    $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\CurrentControlSet\Services\DeployCoreAgent')
+    if ($key) {
+        try {
+            return @{ PathName = $key.GetValue('ImagePath'); StartName = $key.GetValue('ObjectName') }
+        } finally {
+            $key.Dispose()
+        }
+    }
+}
+$registered = Read-DeployCoreService
 $managed = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'DeployCore Managed Agent\deploycore-agent.exe'
 $legacy = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'DeployCore\deploycore-agent.exe'
 $legacyDirectory = Split-Path -Parent $legacy
@@ -53,7 +71,7 @@ try {
     Write-Output "DeployCore Agent active. Log: $log"
 } catch {
     if ($legacyRemoved) {
-        $candidate = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
+        $candidate = Read-DeployCoreService
         if ($candidate -and ($candidate.PathName -ieq ('"' + $managed + '" service-msi') -or $candidate.PathName -ieq ($managed + ' service-msi'))) {
             Start-Process msiexec.exe -ArgumentList @('/x', ('"' + $msiFile + '"'), '/qn', '/norestart') -Wait -PassThru | Out-Null
         }
