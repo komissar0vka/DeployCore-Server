@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && useradd --system --uid 10001 deploycore \
     && install -d -m 0700 -o deploycore /var/lib/deploycore/packages /var/lib/deploycore/cloud
 COPY --from=agent /out/deploycore-agent.exe /opt/deploycore/agent/
-COPY apps/agent/VERSION apps/agent/configured-agent.wxs /opt/deploycore/agent/
+COPY apps/agent/VERSION apps/agent/configured-agent.wxs apps/agent/upgrade-agent.ps1 /opt/deploycore/agent/
 COPY apps/server/deploycore ./deploycore
 COPY apps/server/alembic.ini .
 COPY apps/server/migrations ./migrations

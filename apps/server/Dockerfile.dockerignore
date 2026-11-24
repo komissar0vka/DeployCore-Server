@@ -15,3 +15,5 @@
 !apps/server/migrations/
 !apps/server/migrations/**
 **/__pycache__/
+
+!apps/agent/upgrade-agent.ps1

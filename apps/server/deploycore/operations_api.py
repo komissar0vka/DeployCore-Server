@@ -35,7 +35,7 @@ class UpdateRequest(Wire):
 class Status(Wire):
     id: UUID
     action: Literal["backup", "update"]
-    stage: Literal["queued", "running", "checking", "downloading", "backing_up", "applying",
+    stage: Literal["queued", "running", "checking", "downloading", "loading_images", "backing_up", "applying",
                    "rolling_back", "completed", "failed", "interrupted"]
 
 

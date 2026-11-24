@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 from urllib.request import urlopen
 from uuid import uuid4
 
-from release_images import read_images
+from release_images import load_embedded_images, read_images
 
 ROOT = Path(os.environ.get("DEPLOYCORE_INSTALL_ROOT", Path(__file__).resolve().parents[2])).resolve()
 DEPLOY = ROOT / "deploy"
@@ -192,7 +192,16 @@ def install(channel, version, progress=lambda _stage: None):
         subprocess.run(["docker", "tag", old_image, old_images[service]], check=True)
     previous = override(work / "previous.json", old_images)
     candidate = override(work / "candidate.json", new_images, None if prebuilt else source)
-    compose("pull" if prebuilt else "build", "server", "web", override=candidate)
+    if prebuilt:
+        try:
+            compose("pull", "server", "web", override=candidate)
+        except subprocess.CalledProcessError:
+            if not (source / "deploy/release-images.tar.gz").is_file():
+                raise
+            progress("loading_images")
+            candidate = override(candidate, load_embedded_images(source / "deploy"))
+    else:
+        compose("build", "server", "web", override=candidate)
     database = compose("exec", "-T", "db", "printenv", "POSTGRES_DB", capture_output=True, text=True).stdout.strip()
     restore_db, failed_db = "restore_" + suffix, "failed_" + suffix
     backup_complete = False

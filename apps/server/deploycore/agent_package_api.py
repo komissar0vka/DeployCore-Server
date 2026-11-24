@@ -1,3 +1,5 @@
+import hashlib
+import io
 import json
 import re
 import secrets
@@ -8,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import BoundedSemaphore
+from zipfile import ZIP_STORED, ZipFile
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import Field
@@ -27,6 +30,7 @@ pem_certificate = re.compile(r"-----BEGIN CERTIFICATE-----\r?\n[A-Za-z0-9+/=\r\n
 
 class PackageInput(TokenInput):
     ca: str = Field(default="", max_length=65536)
+    rollout: bool = False
 
 
 def validate_ca(pem: str) -> str:
@@ -64,7 +68,7 @@ def build_msi(server: str, token: str, ca: str) -> bytes:
 
 
 @router.post("/agent-packages", response_class=Response, responses={200: {
-    "content": {MSI_TYPE: {"schema": {"type": "string", "format": "binary"}}},
+    "content": {media: {"schema": {"type": "string", "format": "binary"}} for media in (MSI_TYPE, "application/zip")},
 }})
 def create_agent_package(data: PackageInput, request: Request, db: Db, actor: Operator) -> Response:
     if data.device_id is not None:
@@ -75,6 +79,16 @@ def create_agent_package(data: PackageInput, request: Request, db: Db, actor: Op
     ca = validate_ca(data.ca)
     raw = secrets.token_urlsafe(32)
     msi = build_msi(server, raw, ca)
+    filename = "deploycore-managed-agent.msi"
+    if data.rollout:
+        try:
+            migration = (TEMPLATE / "upgrade-agent.ps1").read_bytes()
+        except OSError as exc:
+            raise HTTPException(503, "agent_package_unavailable") from exc
+        result = rollout_zip(msi, migration)
+        filename = "deploycore-agent-rollout.zip"
+    else:
+        result = msi
     token = EnrollmentToken(
         token_hash=digest(raw), label=data.label, max_uses=data.max_uses, uses=0,
         expires_at=datetime.now(UTC) + timedelta(minutes=data.ttl_minutes), created_by=actor.id,
@@ -83,7 +97,26 @@ def create_agent_package(data: PackageInput, request: Request, db: Db, actor: Op
     db.flush()
     audit(db, request, "agent_package_created", actor=actor, details={"token_id": str(token.id)})
     db.commit()
-    return Response(msi, media_type=MSI_TYPE, headers={
-        "Content-Disposition": 'attachment; filename="deploycore-managed-agent.msi"',
+    return Response(result, media_type="application/zip" if data.rollout else MSI_TYPE, headers={
+        "Content-Disposition": f'attachment; filename="{filename}"',
         "Cache-Control": "no-store",
     })
+
+
+def rollout_zip(msi: bytes, migration: bytes) -> bytes:
+    contents = {"deploycore-managed-agent.msi": msi, "upgrade-agent.ps1": migration}
+    checksum = hashlib.sha256(msi).hexdigest()
+    contents["run-upgrade.ps1"] = (
+        "$ErrorActionPreference = 'Stop'\r\n"
+        "& (Join-Path $PSScriptRoot 'upgrade-agent.ps1') "
+        "-Msi (Join-Path $PSScriptRoot 'deploycore-managed-agent.msi') "
+        f"-Sha256 '{checksum}'\r\n"
+    ).encode()
+    stream = io.BytesIO()
+    with ZipFile(stream, "w", compression=ZIP_STORED) as archive:
+        for name, data in contents.items():
+            archive.writestr(name, data)
+        archive.writestr("SHA256SUMS", "".join(
+            f"{hashlib.sha256(data).hexdigest()}  {name}\n" for name, data in contents.items()
+        ))
+    return stream.getvalue()

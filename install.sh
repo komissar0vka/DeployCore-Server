@@ -75,8 +75,11 @@ if [[ -r deploy/.updater/active.json ]]; then
 elif [[ -f deploy/release-images.json ]]; then
   install -d -m 700 deploy/.updater
   python3 deploy/scripts/release_images.py deploy/release-images.json > deploy/.updater/release-images.tmp
+  if ! "${compose[@]}" -f deploy/.updater/release-images.tmp pull server web; then
+    python3 deploy/scripts/release_images.py deploy/release-images.json --embedded > deploy/.updater/release-images.tmp
+  fi
   mv -f deploy/.updater/release-images.tmp deploy/.updater/active.json
-  "${compose[@]}" -f deploy/.updater/active.json up -d --pull always --no-build --wait --wait-timeout 180
+  "${compose[@]}" -f deploy/.updater/active.json up -d --no-build --wait --wait-timeout 180
 else
   "${compose[@]}" up -d --build --wait --wait-timeout 180
 fi

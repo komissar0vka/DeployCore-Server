@@ -4,7 +4,7 @@ import { api, pollEvery, type Session } from './api'
 import { ConfirmDialog, SectionTitle } from './design'
 import { Action, FormError, Panel, errorMessage, type Translate } from './ui'
 
-type Stage = 'queued' | 'running' | 'checking' | 'downloading' | 'backing_up' | 'applying' | 'rolling_back' | 'completed' | 'failed' | 'interrupted'
+type Stage = 'queued' | 'running' | 'checking' | 'downloading' | 'loading_images' | 'backing_up' | 'applying' | 'rolling_back' | 'completed' | 'failed' | 'interrupted'
 type Operation = { action: 'backup' } | { action: 'update'; channel: 'stable' | 'beta'; version: string }
 interface State {
   available: boolean
@@ -27,7 +27,7 @@ export function HostOperations({ session, t, update }: {
   const active = submit.isPending || !!info?.status && !finished.has(info.status.stage)
   const titles: Record<Stage, string> = {
     queued: t('В очереди', 'Queued'), running: t('Начата', 'Started'), checking: t('Проверка выпуска', 'Checking release'),
-    downloading: t('Загрузка выпуска', 'Downloading release'), backing_up: t('Резервное копирование', 'Backing up'),
+    downloading: t('Загрузка выпуска', 'Downloading release'), loading_images: t('Загрузка готовых образов из архива', 'Loading bundled images'), backing_up: t('Резервное копирование', 'Backing up'),
     applying: t('Запуск новой версии', 'Starting the new version'), rolling_back: t('Восстановление прежней версии', 'Rolling back'),
     completed: t('Завершена', 'Completed'), failed: t('Ошибка операции', 'Operation failed'),
     interrupted: t('Операция прервана', 'Operation interrupted'),

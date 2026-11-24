@@ -3,6 +3,7 @@ name: DeployCore Server images and release bundle
 on:
   push:
     branches: [beta4-validation]
+    tags: ['v1.0.0-beta.4']
   workflow_dispatch:
 
 permissions:
@@ -57,18 +58,31 @@ jobs:
             --arg web "ghcr.io/komissar0vka/deploycore-server-web@$web" \
             '{$server, $web}' > "$bundle/deploy/release-images.json"
           python3 deploy/scripts/release_images.py "$bundle/deploy/release-images.json" > /dev/null
+          server_ref="ghcr.io/komissar0vka/deploycore-server-backend@$server"
+          web_ref="ghcr.io/komissar0vka/deploycore-server-web@$web"
+          docker pull --platform linux/amd64 "$server_ref"
+          docker pull --platform linux/amd64 "$web_ref"
+          server_id=$(docker image inspect --format '{{.Id}}' "$server_ref")
+          web_id=$(docker image inspect --format '{{.Id}}' "$web_ref")
+          jq -n --arg server "$server_id" --arg web "$web_id" '{$server, $web}' > "$bundle/deploy/release-image-ids.json"
+          docker save "$server_id" "$web_id" | gzip -1 > "$bundle/deploy/release-images.tar.gz"
           tar -C "$bundle" -czf "$RUNNER_TEMP/release/deploycore-server-$version.tar.gz" .
           cd "$RUNNER_TEMP/release"
           sha256sum "deploycore-server-$version.tar.gz" > SHA256SUMS
+      - name: Verify bundled fallback image identities
+        run: |
+          set -euo pipefail
+          python3 deploy/scripts/release_images.py "$RUNNER_TEMP/deploycore-server/deploy/release-images.json" --embedded
       - name: Verify image-only installation and host backup
         run: |
           set -euo pipefail
           target="$(mktemp -d /tmp/deploycore-installed-XXXXXXXX)"
           tar -xzf "$RUNNER_TEMP/release/deploycore-server-$VERSION.tar.gz" -C "$target"
-          export DOCKER_CONFIG="$HOME/.docker"
+          export DOCKER_CONFIG="$(mktemp -d)"
           export DEPLOYCORE_HTTPS_BIND=127.0.0.1
           printf '127.0.0.1\n18448\n\n' |
             sudo --preserve-env=DOCKER_CONFIG,DEPLOYCORE_HTTPS_BIND bash "$target/install.sh"
+          sudo grep -q 'deploycore-embedded-server\|ghcr.io/komissar0vka/deploycore-server-backend@sha256' "$target/deploy/.updater/active.json"
           sudo python3 deploy/scripts/ci-installed-server.py "$target" https://127.0.0.1:18448 "$RUNNER_TEMP/ux-login.json"
       - name: Capture hosted Chromium screenshots
         run: |

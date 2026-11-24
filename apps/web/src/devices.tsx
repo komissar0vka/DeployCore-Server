@@ -530,7 +530,8 @@ export function AgentInstallPage({ session, t, server, configuredAddress }: Prop
     try {
       const body = { label: fields.get('label'), ttl_minutes: Number(fields.get('ttl_minutes')), max_uses: Number(fields.get('max_uses')) }
       const button = (event.nativeEvent as SubmitEvent).submitter
-      if (button instanceof HTMLButtonElement && button.value === 'msi') {
+      if (button instanceof HTMLButtonElement && (button.value === 'msi' || button.value === 'rollout')) {
+        const rollout = button.value === 'rollout'
         const ca = fields.get('ca')
         if (ca instanceof File && ca.size > 65536) {
           setProblem(t('PEM-файл превышает 64 КиБ.', 'The PEM file exceeds 64 KiB.'))
@@ -538,12 +539,12 @@ export function AgentInstallPage({ session, t, server, configuredAddress }: Prop
         }
         const packageFile = await api<Blob>('/agent-packages', {
           method: 'POST', csrf: session.csrf_token, responseType: 'blob',
-          body: { ...body, ca: ca instanceof File ? await ca.text() : '' },
+          body: { ...body, rollout, ca: ca instanceof File ? await ca.text() : '' },
         })
         const url = URL.createObjectURL(packageFile)
         const link = document.createElement('a')
         link.href = url
-        link.download = 'deploycore-managed-agent.msi'
+        link.download = rollout ? 'deploycore-agent-rollout.zip' : 'deploycore-managed-agent.msi'
         document.body.append(link)
         link.click()
         link.remove()
@@ -602,6 +603,9 @@ export function AgentInstallPage({ session, t, server, configuredAddress }: Prop
         <FormError message={problem} />
         <div className="flex flex-wrap gap-2">
           <Action type="submit" value="msi" disabled={busy || !!secret || !configuredAddress}>{t('Скачать готовый MSI', 'Download configured MSI')}</Action>
+          <Action type="submit" value="rollout" secondary disabled={busy || !!secret || !configuredAddress}>
+            {t('Скачать комплект обновления', 'Download upgrade bundle')}
+          </Action>
           <Action type="submit" secondary disabled={busy || !!secret}>{t('Создать токен', 'Create token')}</Action>
         </div>
       </form>

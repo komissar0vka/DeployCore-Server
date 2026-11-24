@@ -1522,6 +1522,12 @@
                   "type": "string",
                   "format": "binary"
                 }
+              },
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -7172,6 +7178,7 @@
               "running",
               "checking",
               "downloading",
+              "loading_images",
               "backing_up",
               "applying",
               "rolling_back",
@@ -8021,6 +8028,11 @@
             "maxLength": 65536,
             "title": "Ca",
             "default": ""
+          },
+          "rollout": {
+            "type": "boolean",
+            "title": "Rollout",
+            "default": false
           }
         },
         "additionalProperties": false,
