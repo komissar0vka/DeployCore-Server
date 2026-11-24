@@ -68,6 +68,7 @@ jobs:
           docker save "$server_id" "$web_id" | gzip -1 > "$bundle/deploy/release-images.tar.gz"
           tar -C "$bundle" -czf "$RUNNER_TEMP/release/deploycore-server-$version.tar.gz" .
           cd "$RUNNER_TEMP/release"
+          test "$(stat -c %s "deploycore-server-$version.tar.gz")" -le 268435456
           sha256sum "deploycore-server-$version.tar.gz" > SHA256SUMS
       - name: Verify bundled fallback image identities
         run: |
