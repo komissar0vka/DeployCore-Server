@@ -75,6 +75,8 @@ try {
         if ($pins.Count -eq 0 -or @($pins | Where-Object { $_ -notmatch '^[A-Fa-f0-9]{64}$' }).Count -ne 0) {
             throw 'Invalid agent update publisher fingerprints.'
         }
+        $securityModule = Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
+        Import-Module -Name $securityModule
         $auth = Get-AuthenticodeSignature -LiteralPath $msiFile
         if ($auth.Status -ne 'Valid' -or -not $auth.SignerCertificate) {
             throw 'Agent update MSI does not have a valid Authenticode signature.'
