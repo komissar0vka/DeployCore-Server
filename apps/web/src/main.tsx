@@ -23,7 +23,7 @@ function expireSession(error: unknown) {
 }
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: false } },
+  defaultOptions: { queries: { retry: false, retryOnMount: false, refetchOnWindowFocus: false } },
   queryCache: new QueryCache({ onError: expireSession }),
   mutationCache: new MutationCache({ onError: expireSession }),
 })

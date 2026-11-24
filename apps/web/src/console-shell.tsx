@@ -170,7 +170,7 @@ function Topbar({ navigate, session, t, language, changeLanguage, logout, loggin
       </>}>{close => <>
         <div className="border-b border-border px-2 py-2 text-sm">
           <p className="break-all font-semibold">{session.user.username}</p>
-          <p className="text-muted-foreground">{roleLabels[session.user.role]}</p>
+          <p className="text-muted-foreground">{roleLabels(t)[session.user.role]}</p>
         </div>
         <button className="mt-1 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-muted" type="button" onClick={changeTheme}>
           {theme === 'dark' ? <Sun className="size-4" aria-hidden /> : <Moon className="size-4" aria-hidden />}
@@ -199,8 +199,8 @@ export function AppShell({ route, navigate, session, organization, t, language, 
     navigate({ section })
     setMobileMenu(false)
   }} />
-  return <div className="min-h-dvh lg:pl-[260px]">
-    <aside className="console-sidebar fixed inset-y-0 left-0 z-20 hidden w-[260px] min-w-0 border-r border-border lg:flex lg:flex-col">
+  return <div className="min-h-dvh lg:pl-56">
+    <aside className="console-sidebar fixed inset-y-0 left-0 z-20 hidden w-56 min-w-0 border-r border-border lg:flex lg:flex-col">
       <div className="flex min-h-16 items-center gap-3 border-b border-border px-5 text-white">
         <Layers3 className="size-9 shrink-0 rounded-xl bg-accent p-2" aria-hidden />
         <span className="text-lg font-semibold tracking-tight">DeployCore</span>

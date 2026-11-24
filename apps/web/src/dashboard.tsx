@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowDownToLine, ClipboardList, ListTodo, Monitor, Package, Radio, WifiOff } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { JobScope } from './console-shell'
-import { api } from './api'
+import { api, pollEvery } from './api'
 import { ActivityFeed, EmptyState, LoadingSkeleton, QuickAction, SectionTitle, StatCard } from './design'
 import { Action, errorMessage, FormError, Panel, type Translate } from './ui'
 
@@ -43,7 +43,7 @@ export function FleetActivity({ items, t, warning }: { items: FleetEntry[]; t: T
 }
 
 export function useFleetSummary() {
-  return useQuery({ queryKey: ['fleet-summary'], queryFn: () => api<FleetSummary>('/devices/summary'), refetchInterval: 15_000 })
+  return useQuery({ queryKey: ['fleet-summary'], queryFn: () => api<FleetSummary>('/devices/summary'), refetchInterval: pollEvery(15_000) })
 }
 
 function FleetChart({ online, offline, total, t }: { online: number; offline: number; total: number; t: Translate }) {
@@ -75,7 +75,7 @@ export function Dashboard({ t, openInstaller, openDevices, openInventory, openJo
 }) {
   const summary = useFleetSummary()
   const catalog = useQuery({ queryKey: ['packages', 'count'], queryFn: () => api<{ total: number }>('/packages?limit=1') })
-  const jobs = useQuery({ queryKey: ['deployments', 'count'], queryFn: () => api<{ active: number; problem: number; items: { id: string; package_name: string; version: string; created_at: string }[] }>('/deployments?scope=problem&limit=5'), refetchInterval: 15_000 })
+  const jobs = useQuery({ queryKey: ['deployments', 'count'], queryFn: () => api<{ active: number; problem: number; items: { id: string; package_name: string; version: string; created_at: string }[] }>('/deployments?scope=problem&limit=5'), refetchInterval: pollEvery(15_000) })
   const data = summary.data
   return <div className="grid gap-4">
     {summary.isError && <div className="grid gap-2">

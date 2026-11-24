@@ -104,7 +104,7 @@ export function SetupWizard({ status, complete, t }: { status: SetupStatus; comp
           <div><dt className="text-sm text-muted-foreground">{t('Организация', 'Organization')}</dt><dd>{organization}</dd></div>
           <div><dt className="text-sm text-muted-foreground">{t('Имя экземпляра', 'Instance name')}</dt><dd>{instanceName}</dd></div>
           <div><dt className="text-sm text-muted-foreground">{t('Адрес для агентов', 'Agent address')}</dt><dd>{agentOrigin()}</dd></div>
-          <div><dt className="text-sm text-muted-foreground">Super Admin</dt><dd>{username}</dd></div>
+          <div><dt className="text-sm text-muted-foreground">{t('Суперадминистратор', 'Super Admin')}</dt><dd>{username}</dd></div>
         </dl>}
         <FormError message={problem} />
         <div className="flex flex-wrap gap-3">

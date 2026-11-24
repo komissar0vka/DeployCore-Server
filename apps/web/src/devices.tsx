@@ -5,7 +5,8 @@ import { useFleetSummary } from './dashboard'
 import type { DeviceStatusFilter } from './console-shell'
 import { ActivityFeed, ConfirmDialog, DataTable, DeviceCard, EmptyState, LoadingSkeleton, SectionTitle, StatusBadge } from './design'
 import { Dropdown } from './components/ui/dropdown'
-import { api, type Session } from './api'
+import { DeviceGroupsDialog } from './groups'
+import { api, pollEvery, type Session } from './api'
 import { Action, errorMessage, Field, FormError, Panel, type Translate } from './ui'
 
 interface Device {
@@ -104,10 +105,11 @@ export function DevicesPage({ session, t, openInstaller, initialSearch = '', ini
   const [display, setDisplay] = useState<'auto' | 'table' | 'cards'>('auto')
   const [selection, setSelection] = useState(new Map<string, string>())
   const [copyStatus, setCopyStatus] = useState('')
+  const [openGroups, setOpenGroups] = useState(false)
   const fleet = useFleetSummary()
   const devices = useQuery({
     queryKey: ['devices', term, status, page, sort.key, sort.direction, agentVersion, management], enabled: !selected,
-    refetchInterval: monitoring ? 15_000 : false,
+    refetchInterval: monitoring ? pollEvery(15_000) : false,
     queryFn: () => api<{ items: Device[]; total: number }>(`/devices?${new URLSearchParams({
       q: term, status, ...(agentVersion ? { agent_version: agentVersion } : {}), ...(management ? { management_state: management } : {}), offset: String(page * pageSize), limit: String(pageSize), sort: sort.key, direction: sort.direction,
     })}`),
@@ -172,6 +174,8 @@ export function DevicesPage({ session, t, openInstaller, initialSearch = '', ini
   }
 
   return <div className="grid gap-4">
+    {openGroups && <DeviceGroupsDialog session={session} t={t} selected={selection} close={() => setOpenGroups(false)} />}
+    {!inventory && !monitoring && <div><Action secondary onClick={() => setOpenGroups(true)}>{t('Группы устройств', 'Device groups')}</Action></div>}
     <Panel>
       <form className="flex flex-wrap items-end gap-3" onSubmit={event => {
         event.preventDefault()
@@ -510,7 +514,7 @@ export function AgentInstallPage({ session, t, server, configuredAddress }: Prop
   const origin = server.replace(/\/$/, '')
   const sameOrigin = origin === window.location.origin && window.location.protocol === 'https:'
   const check = useQuery({
-    queryKey: ['agent-readiness', origin], enabled: sameOrigin, refetchInterval: 30_000,
+    queryKey: ['agent-readiness', origin], enabled: sameOrigin, refetchInterval: pollEvery(30_000),
     queryFn: async ({ signal }) => {
       const result = await fetch('/api/health/ready', { cache: 'no-store', signal, redirect: 'error' })
       if (!result.ok || (await result.json()).status !== 'ok') throw new Error('not ready')

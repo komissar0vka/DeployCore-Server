@@ -43,6 +43,47 @@ export class ApiError extends Error {
   }
 }
 
+export function pollEvery(interval: number) {
+  return ({ state }: { state: { error: Error | null } }) => {
+    const error = state.error
+    return error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 429
+      ? false : interval
+  }
+}
+
+export function upload<T>(path: string, file: File, csrf: string, progress: (value: number) => void, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest()
+    const abort = () => request.abort()
+    request.open('POST', '/api/v1' + path)
+    request.responseType = 'json'
+    request.setRequestHeader('Content-Type', 'application/octet-stream')
+    request.setRequestHeader('X-DeployCore-Request', '1')
+    request.setRequestHeader('X-CSRF-Token', csrf)
+    request.upload.onprogress = event => {
+      if (event.lengthComputable) progress(Math.round(event.loaded / event.total * 100))
+    }
+    request.onerror = () => reject(new Error('network'))
+    request.onabort = () => reject(new DOMException('aborted', 'AbortError'))
+    request.onloadend = () => signal.removeEventListener('abort', abort)
+    request.onload = () => {
+      if (request.status < 200 || request.status >= 300) {
+        reject(new ApiError(request.status, typeof request.response?.detail === 'string' ? request.response.detail : ''))
+      } else {
+        const deadline = request.getResponseHeader('X-DeployCore-Session-Expires')
+        if (deadline) window.dispatchEvent(new CustomEvent('deploycore:session-expiry', { detail: deadline }))
+        resolve(request.response as T)
+      }
+    }
+    if (signal.aborted) {
+      reject(new DOMException('aborted', 'AbortError'))
+      return
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    request.send(file)
+  })
+}
+
 export async function api<T>(path: string, options: { method?: string; body?: unknown; csrf?: string; signal?: AbortSignal; responseType?: 'blob' } = {}): Promise<T> {
   const { method = 'GET', body, csrf, signal, responseType } = options
   const headers = new Headers()

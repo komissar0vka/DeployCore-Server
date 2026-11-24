@@ -8,6 +8,37 @@ import { Action, Field, FormError, Panel, errorMessage, roleLabels, type Transla
 
 type Context = { session: Session; t: Translate }
 
+function ServerDiagnostics({ t }: { t: Translate }) {
+  const [expanded, setExpanded] = useState(false)
+  const query = useQuery({
+    queryKey: ['system-events'], enabled: expanded,
+    queryFn: () => api<{ time: string; kind: 'started' | 'http_error' | 'cloud_check_failed'; status?: number; route?: string }[]>('/system/events'),
+  })
+  const titles = {
+    started: t('Server запущен', 'Server started'),
+    http_error: t('Ошибка API', 'API error'),
+    cloud_check_failed: t('Ошибка связи с Cloud', 'Cloud connection failed'),
+  }
+  return <Panel>
+    <SectionTitle title={t('Диагностика Server', 'Server diagnostics')}
+      actions={<Action secondary onClick={() => {
+        if (expanded) void query.refetch()
+        else setExpanded(true)
+      }}>{expanded ? t('Обновить журнал', 'Refresh log') : t('Показать журнал', 'Show log')}</Action>} />
+    {expanded && <>
+      <p className="mb-2 text-sm text-muted-foreground">{t('События с последнего запуска Server.', 'Events since the last Server start.')}</p>
+      <FormError message={query.error ? errorMessage(query.error, t) : null} />
+      {query.isPending ? <LoadingSkeleton label={t('Загрузка журнала', 'Loading log')} /> :
+        !!query.data?.length && <ul className="max-h-64 divide-y divide-border overflow-y-auto text-sm">
+          {query.data.map((event, index) => <li className="py-2" key={index}>
+            <p>{titles[event.kind]}{event.status ? ` · HTTP ${event.status}` : ''}</p>
+            <p className="break-words text-muted-foreground">{new Date(event.time).toLocaleString(t('ru', 'en'))}{event.route ? ` · ${event.route}` : ''}</p>
+          </li>)}
+        </ul>}
+    </>}
+  </Panel>
+}
+
 export function SettingsPage({ settings, session, t, health }: Context & { settings: Settings; health: React.ReactNode }) {
   const client = useQueryClient()
   const writable = session.user.role === 'super_admin'
@@ -56,16 +87,17 @@ export function SettingsPage({ settings, session, t, health }: Context & { setti
         <div className="mb-3 flex justify-between gap-3 text-sm"><span className="text-muted-foreground">{t('Версия DeployCore', 'DeployCore version')}</span><span className="font-mono text-info">{settings.version}</span></div>
         {health}
       </Panel>
+      {writable && <ServerDiagnostics t={t} />}
     </div>
   </div>
 }
 
-function RoleSelector({ name = 'role', value, onChange, label, disabled }: {
-  name?: string; value?: Role; onChange?: (role: Role) => void; label: string; disabled?: boolean
+function RoleSelector({ name = 'role', value, onChange, label, disabled, t }: {
+  name?: string; value?: Role; onChange?: (role: Role) => void; label: string; disabled?: boolean; t: Translate
 }) {
   return <select name={name} aria-label={label} className="input" value={value} defaultValue={value === undefined ? 'viewer' : undefined}
     disabled={disabled} onChange={onChange && (event => onChange(event.target.value as Role))}>
-    {Object.entries(roleLabels).map(([key, title]) => <option key={key} value={key}>{title}</option>)}
+    {Object.entries(roleLabels(t)).map(([key, title]) => <option key={key} value={key}>{title}</option>)}
   </select>
 }
 
@@ -75,7 +107,7 @@ function UserRow({ user, ownId, t, change }: { user: User; ownId: string; t: Tra
     <UserRound className="size-4 shrink-0 text-info" aria-hidden />
     <span className="min-w-0 break-all text-sm font-medium">{user.username}{user.id === ownId && <span className="ml-2 text-sm text-muted-foreground">{t('(вы)', '(you)')}</span>}</span>
     <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
-      <RoleSelector value={role} onChange={setRole} label={`${t('Роль', 'Role')} · ${user.username}`} />
+      <RoleSelector t={t} value={role} onChange={setRole} label={`${t('Роль', 'Role')} · ${user.username}`} />
       <Action type="button" secondary disabled={role === user.role} onClick={() => change(user.id, role)}>{t('Сменить роль', 'Change role')}</Action>
     </div>
   </li>
@@ -123,7 +155,7 @@ export function UsersPage({ session, t }: Context) {
       <form className="grid gap-4" onSubmit={submit}>
         <Field label={t('Имя пользователя', 'Username')} name="username" required minLength={3} maxLength={64} autoComplete="off" />
         <Field label={t('Пароль', 'Password')} type="password" name="password" required minLength={12} maxLength={128} autoComplete="new-password" />
-        <label className="grid gap-2 text-sm font-medium">{t('Роль', 'Role')}<RoleSelector label={t('Роль нового пользователя', 'New user role')} /></label>
+        <label className="grid gap-2 text-sm font-medium">{t('Роль', 'Role')}<RoleSelector t={t} label={t('Роль нового пользователя', 'New user role')} /></label>
         <FormError message={create.error && errorMessage(create.error, t)} />
         <Action type="submit" disabled={create.isPending}>{t('Создать пользователя', 'Create user')}</Action>
       </form>

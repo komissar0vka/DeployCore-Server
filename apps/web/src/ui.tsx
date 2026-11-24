@@ -5,8 +5,12 @@ import { ApiError, type Language, type Role } from './api'
 export type Translate = (ru: string, en: string) => string
 export const translator = (language: Language): Translate => (ru, en) => language === 'ru' ? ru : en
 
-export const roleLabels: Record<Role, string> = {
-  super_admin: 'Super Admin', administrator: 'Administrator', viewer: 'Viewer',
+export function roleLabels(t: Translate): Record<Role, string> {
+  return {
+    super_admin: t('Суперадминистратор', 'Super Admin'),
+    administrator: t('Администратор', 'Administrator'),
+    viewer: t('Наблюдатель', 'Viewer'),
+  }
 }
 
 export function errorMessage(error: unknown, t: Translate) {
@@ -17,6 +21,12 @@ export function errorMessage(error: unknown, t: Translate) {
     setup_token_invalid: t('Секрет настройки неверен.', 'The setup secret is incorrect.'),
     invalid_credentials: t('Неверное имя пользователя или пароль.', 'Incorrect username or password.'),
     login_limited: t('Слишком много попыток. Повторите вход через 10 минут.', 'Too many attempts. Try again in 10 minutes.'),
+    cloud_origin_invalid: t('Укажи HTTPS-адрес Cloud без пути.', 'Enter an HTTPS Cloud address without a path.'),
+    cloud_keys_mismatch: t('Ключи Cloud не совпадают с введёнными.', 'Cloud keys differ from the pinned keys.'),
+    invalid_cloud_ca: t('Загрузи публичный сертификат без приватного ключа.', 'Upload a public certificate without a private key.'),
+    cloud_activation_rejected: t('Cloud отклонил активацию. Проверь токен и доступность лицензии.', 'Cloud rejected activation. Check the token and license.'),
+    cloud_activation_unavailable: t('Не удалось проверить Cloud. Проверь адрес, сертификат и сеть.', 'Could not verify Cloud. Check the address, certificate and network.'),
+    cloud_license_unavailable: t('Cloud не выдал действующую лицензию.', 'Cloud did not issue a valid license.'),
     license_limit_reached: t('Все места лицензии заняты.', 'All license slots are occupied.'),
     license_trust_unavailable: t('Локальный набор доверия не настроен.', 'The local trust configuration is unavailable.'),
     license_verifier_unavailable: t('Проверка подписи недоступна.', 'The signature verifier is unavailable.'),
@@ -26,25 +36,30 @@ export function errorMessage(error: unknown, t: Translate) {
     license_outside_validity: t('Лицензия вне срока действия.', 'The license is outside its validity period.'),
     license_issue_regression: t('Эта выдача устарела или конфликтует с принятой.', 'This issue is stale or conflicts with the accepted grant.'),
     device_execution_unresolved: t('Сначала завершите сверку развёртывания.', 'Resolve the deployment outcome first.'),
+    device_group_duplicate: t('Группа с таким названием уже существует.', 'This group name already exists.'),
+    device_group_limit: t('Достигнут лимит групп.', 'The group limit has been reached.'),
     device_retired: t('Устройство снято с управления.', 'The device is retired.'),
     agent_package_address_required: t('Сначала сохраните адрес сервера для агентов.', 'Save the server address for agents first.'),
     agent_package_invalid_ca: t('Загрузите только сертификаты в формате PEM.', 'Upload certificates in PEM format only.'),
     agent_package_busy: t('Другой MSI ещё собирается. Повторите запрос.', 'Another MSI is being built. Try again.'),
     agent_package_unavailable: t('Не удалось собрать MSI.', 'Could not build the MSI.'),
     permission_denied: t('Недостаточно прав для этой операции.', 'You do not have permission for this action.'),
-    last_super_admin: t('У экземпляра должен остаться хотя бы один Super Admin.', 'The instance must retain at least one Super Admin.'),
+    last_super_admin: t('У экземпляра должен остаться хотя бы один суперадминистратор.', 'The instance must retain at least one Super Admin.'),
     username_exists: t('Это имя пользователя уже занято.', 'This username is already taken.'),
     package_duplicate: t('Запись с таким названием или версией уже существует.', 'A package or version with this identity already exists.'),
     package_artifact_immutable: t('Файл уже сохранён. Для замены создайте версию.', 'This file is already stored. Create a version to replace it.'),
     package_signature_required: t('Для утверждения нужна проверенная подпись Authenticode.', 'Approval requires a verified Authenticode signature.'),
     package_manual_approval_unavailable: t('Ручное утверждение доступно для загруженного файла с неподтверждённой подписью.', 'Manual approval requires an uploaded file with an unverified signature.'),
     package_approval_hash_mismatch: t('SHA-256 не совпадает с текущим файлом. Обновите карточку и проверьте файл.', 'The SHA-256 differs from the current file. Refresh the version and check the file.'),
+    package_version_in_use: t('Версия уже использована. Создай новую версию с нужными параметрами.', 'This version is used by deployments. Create a new version with the required settings.'),
+    package_intake_expired: t('Загрузка больше недоступна. Выбери файл снова.', 'The upload has expired. Select the file again.'),
     package_architecture_mismatch: t('Архитектура файла отличается от указанной.', 'The installer architecture does not match.'),
     package_invalid_format: t('Файл не соответствует формату MSI или EXE.', 'The file does not match the MSI or EXE format.'),
     package_too_large: t('Файл превышает допустимый размер.', 'The file exceeds the size limit.'),
     package_storage_full: t('Недостаточно свободного места в хранилище.', 'The artifact volume has insufficient free space.'),
     package_upload_busy: t('Идёт другая загрузка. Повторите позже.', 'Another upload is in progress. Try again later.'),
     package_verifier_unavailable: t('Проверка установщиков недоступна.', 'The installer verifier is unavailable.'),
+    deployment_schedule_invalid: t('Выбери будущее время в пределах следующего года.', 'Choose a future time within the next year.'),
     deployment_devices_unavailable: t('Часть выбранных устройств недоступна для заданий.', 'Some devices are unavailable for deployments.'),
     deployment_version_unavailable: t('Для задания выберите утверждённую версию с установщиком.', 'Select an approved version with an installer.'),
     deployment_uninstall_unavailable: t('Для этой версии удаление не разрешено.', 'Removal is unavailable for this version.'),
