@@ -5,6 +5,8 @@ from pathlib import Path
 from statistics import median
 from time import monotonic
 from uuid import uuid4
+from urllib.error import HTTPError
+from urllib.request import Request, HTTPSHandler, ProxyHandler, build_opener
 import json
 import os
 import secrets
@@ -12,7 +14,7 @@ import subprocess
 import threading
 
 
-def exercise_load(check, sql, compose, count, report):
+def exercise_load(check, sql, compose, base, context, count, report):
     if count not in {100, 500, 1000} or os.environ.get("GITHUB_ACTIONS") != "true":
         raise RuntimeError("Load checks require an isolated GitHub Actions matrix job")
 
@@ -21,7 +23,7 @@ def exercise_load(check, sql, compose, count, report):
     token_hash = sha256(secrets.token_bytes(32)).hexdigest()
     records = ",".join(f"('{id_}'::uuid,'{sha256(token.encode()).hexdigest()}','{hostname}')"
                        for id_, token, hostname in agents)
-    sql(f"""
+    fixture_sql = f"""
       BEGIN;
       CREATE TEMP TABLE load_fixture(id uuid, hash text, hostname text) ON COMMIT DROP;
       INSERT INTO load_fixture VALUES {records};
@@ -39,7 +41,9 @@ def exercise_load(check, sql, compose, count, report):
       INSERT INTO deployment_targets(id, job_id, device_id, state, cancel_requested)
         SELECT gen_random_uuid(), '{job_id}', id, 'queued', false FROM load_fixture;
       COMMIT;
-    """)
+    """
+    subprocess.run([*compose, "exec", "-T", "db", "psql", "-U", "deploycore", "-d", "deploycore",
+                    "-v", "ON_ERROR_STOP=1"], input=fixture_sql, text=True, check=True, stdout=subprocess.DEVNULL)
 
     percentiles = {}
     samples = []
@@ -72,11 +76,11 @@ def exercise_load(check, sql, compose, count, report):
                              extra={"Authorization": f"Bearer {token}"})
         return result, (monotonic() - start) * 1000
 
-    def heartbeat(agent, expected=200):
+    def heartbeat(agent):
         _, _, hostname = agent
         data = dict(hostname=hostname, fqdn=hostname, network_name="WORKGROUP", domain_joined=False, ips=[],
                     os_version="Windows", agent_version="0.3.8", uptime_seconds=61)
-        return request(agent, "heartbeat", data=data, expected=expected)[1]
+        return request(agent, "heartbeat", data=data)[1]
 
     def deployment(agent):
         start = monotonic()
@@ -103,7 +107,14 @@ def exercise_load(check, sql, compose, count, report):
         batch("parallel_heartbeat", heartbeat)
         batch("queue_delivery_and_result", deployment)
         subprocess.run([*compose, "stop", "server"], check=True, stdout=subprocess.DEVNULL)
-        heartbeat(agents[0], expected=502)
+        opener = build_opener(ProxyHandler({}), HTTPSHandler(context=context))
+        unavailable = Request(base + "/api/health/ready")
+        try:
+            with opener.open(unavailable, timeout=10):
+                raise AssertionError("API remained available with Server stopped")
+        except HTTPError as error:
+            with error:
+                assert error.code in (502, 504), error.code
         subprocess.run([*compose, "up", "-d", "--no-build", "--no-deps", "--wait", "--wait-timeout", "90", "server"],
                        check=True, stdout=subprocess.DEVNULL)
         batch("post_restart_heartbeat", heartbeat)

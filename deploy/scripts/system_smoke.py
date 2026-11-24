@@ -163,4 +163,4 @@ exercise_agent_package(check, login, compose, base, context, settings["agent_url
 if count := os.environ.get("DEPLOYCORE_LOAD_COUNT"):
     from agent_load import exercise_load
 
-    exercise_load(check, sql, compose, int(count), os.environ["DEPLOYCORE_LOAD_REPORT"])
+    exercise_load(check, sql, compose, base, context, int(count), os.environ["DEPLOYCORE_LOAD_REPORT"])
