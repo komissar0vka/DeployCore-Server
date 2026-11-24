@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -8,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"time"
 )
@@ -82,7 +84,7 @@ func (p JobTrust) verify(s signedExecution, device string, job Assignment, now t
 		return manifest, time.Time{}, errors.New("invalid job signature")
 	}
 	var a executionAuthorization
-	if err := json.Unmarshal(payload, &a); err != nil ||
+	if !uniqueJSONKeys(payload) || json.Unmarshal(payload, &a) != nil ||
 		a.DeviceID != device || a.TargetID != job.TargetID || a.AttemptID != job.AttemptID ||
 		a.VersionID != job.VersionID || a.Operation != job.Operation {
 		return manifest, time.Time{}, errors.New("signed job does not match assignment")
@@ -123,4 +125,47 @@ func (r jobReplay) consume(target string, expires, now time.Time) (jobReplay, er
 	}
 	next[target] = now.Add(24 * time.Hour)
 	return next, nil
+}
+
+func uniqueJSONKeys(raw []byte) bool {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if !uniqueJSONValue(decoder, 0) {
+		return false
+	}
+	_, err := decoder.Token()
+	return errors.Is(err, io.EOF)
+}
+
+func uniqueJSONValue(decoder *json.Decoder, depth int) bool {
+	if depth > 24 {
+		return false
+	}
+	start, err := decoder.Token()
+	if err != nil {
+		return false
+	}
+	delim, compound := start.(json.Delim)
+	if !compound {
+		return true
+	}
+	if delim != '{' && delim != '[' {
+		return false
+	}
+	keys := make(map[string]bool)
+	for decoder.More() {
+		if delim == '{' {
+			key, err := decoder.Token()
+			name, ok := key.(string)
+			if err != nil || !ok || keys[name] {
+				return false
+			}
+			keys[name] = true
+		}
+		if !uniqueJSONValue(decoder, depth+1) {
+			return false
+		}
+	}
+	end, err := decoder.Token()
+	return err == nil && ((delim == '{' && end == json.Delim('}')) || (delim == '[' && end == json.Delim(']')))
 }

@@ -85,3 +85,19 @@ func TestExecutionReplaySurvivesSerialization(t *testing.T) {
 		t.Fatal("expired authorization accepted at start")
 	}
 }
+
+func TestStrictExecutionJSON(t *testing.T) {
+	for _, malformed := range []string{
+		`{"device_id":"one","device_id":"two"}`,
+		`{"manifest":{"args":[],"args":["other"]}}`,
+		`{"keys":{"test":"one","\u0074est":"two"}}`,
+		`{}{}`,
+	} {
+		if uniqueJSONKeys([]byte(malformed)) {
+			t.Errorf("ambiguous JSON accepted: %s", malformed)
+		}
+	}
+	if !uniqueJSONKeys([]byte(`{"a":[{"key":1},{"key":2}],"b":null}`)) {
+		t.Error("valid nested JSON rejected")
+	}
+}

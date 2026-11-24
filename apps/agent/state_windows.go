@@ -179,7 +179,7 @@ func loadJobTrust(directory string) (*JobTrust, jobReplay, error) {
 		return nil, nil, err
 	}
 	var trust JobTrust
-	if len(raw) > 256*1024 || json.Unmarshal(raw, &trust) != nil {
+	if len(raw) > 256*1024 || !uniqueJSONKeys(raw) || json.Unmarshal(raw, &trust) != nil {
 		return nil, nil, fmt.Errorf("invalid job trust policy")
 	}
 	if err := trust.validate(); err != nil {
