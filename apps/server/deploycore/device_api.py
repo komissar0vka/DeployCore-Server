@@ -1,8 +1,10 @@
+import io
 import json
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -274,6 +276,47 @@ def device_detail(device_id: UUID, db: Db, actor: Reader) -> wire.DeviceDetail:
     )
     db.commit()
     return result
+
+
+DIAGNOSTIC_EVENTS = frozenset({
+    "registered", "reconnected", "name_changed", "inventory_failed", "inventory_updated",
+    "agent_revoked", "agent_recovered", "device_retired", "device_resumed",
+})
+
+
+def diagnostic_archive(device, agent, events, now: datetime, since: datetime) -> bytes:
+    snapshot = {
+        "schema_version": 1,
+        "collected_at": now.isoformat(),
+        "agent_version": device.agent_version,
+        "last_authenticated_connection": device.last_seen_at.isoformat(),
+        "online": device.management_state == "managed" and agent.revoked_at is None and device.last_seen_at >= since,
+        "credential_revoked": agent.revoked_at is not None,
+        "management_state": device.management_state,
+        "events": [{"action": event.action, "created_at": event.created_at.isoformat()}
+                   for event in events if event.action in DIAGNOSTIC_EVENTS],
+    }
+    buffer = io.BytesIO()
+    with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("agent-summary.json", json.dumps(snapshot, indent=2))
+    return buffer.getvalue()
+
+
+@router.post("/devices/{device_id}/diagnostics/export", tags=["Devices"], response_class=Response,
+             responses={200: {"content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}}}})
+def export_diagnostics(device_id: UUID, request: Request, db: Db, actor: Operator) -> Response:
+    device = live_device(db, device_id)
+    agent = db.get(Agent, device_id)
+    if agent is None:
+        raise HTTPException(404, "agent_not_found")
+    now = clock()
+    events = db.scalars(select(DeviceEvent).where(DeviceEvent.device_id == device_id,
+                        DeviceEvent.action.in_(DIAGNOSTIC_EVENTS)).order_by(DeviceEvent.id.desc()).limit(100)).all()
+    archive = diagnostic_archive(device, agent, events, now, cutoff(db, now))
+    audit(db, request, "device_diagnostics_exported", actor=actor, details={"device_id": str(device_id)})
+    db.commit()
+    return Response(archive, media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="deploycore-agent-diagnostics.zip"'})
 
 
 @router.get("/enrollment-tokens", tags=["Enrollment"])

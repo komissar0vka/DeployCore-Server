@@ -1,9 +1,12 @@
 """Exercise agent APIs against the isolated DeployCore stack."""
 import concurrent.futures
 import hashlib
+import io
+import json
 import secrets
 import subprocess
 import uuid
+from zipfile import ZipFile
 
 
 def exercise_devices(check, login, sql, compose, admin_cookie, admin_csrf, password):
@@ -99,6 +102,17 @@ def exercise_devices(check, login, sql, compose, admin_cookie, admin_csrf, passw
     for _ in range(2):
         agent_call(device_id, "issues", credential, {"action": "inventory_failed"}, {204})
     assert [item["action"] for item in check("/devices/summary", {200}, **viewer)[1]["errors"]] == ["inventory_failed"]
+    export = f"/devices/{device_id}/diagnostics/export"
+    check(export, {403}, method="POST", **viewer)
+    check(export, {403}, method="POST", cookie=operator_cookie)
+    _, archive, headers = check(export, {200}, method="POST", binary=True, **operator)
+    assert headers["Content-Type"] == "application/zip"
+    with ZipFile(io.BytesIO(archive)) as payload:
+        content = payload.read("agent-summary.json")
+        summary = json.loads(content)
+    assert summary["online"] and summary["agent_version"] == heartbeat["agent_version"]
+    assert any(event["action"] == "inventory_failed" for event in summary["events"])
+    assert credential.encode() not in content and heartbeat["hostname"].encode() not in content
     agent_call(device_id, "issues", credential, {"action": "arbitrary_error"}, {422})
     agent_call(device_id, "heartbeat", secrets.token_urlsafe(32), heartbeat, {401})
     agent_call(device_id, "heartbeat", credential, {**heartbeat, "ips": ["invalid"]}, {422})

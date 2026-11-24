@@ -21,7 +21,7 @@ wrong_password = secrets.token_urlsafe(24)
 setup_token = os.environ["DEPLOYCORE_SETUP_TOKEN"]
 
 
-def check(path, expected, *, method="GET", data=None, cookie="", csrf=None, origin=base, extra=None):
+def check(path, expected, *, method="GET", data=None, cookie="", csrf=None, origin=base, extra=None, binary=False):
     headers = {"X-DeployCore-Request": "1"}
     if origin:
         headers["Origin"] = origin
@@ -46,7 +46,7 @@ def check(path, expected, *, method="GET", data=None, cookie="", csrf=None, orig
         assert response.status in expected, (method, path, response.status, body)
         assert response.headers["Cache-Control"] == "no-store"
         assert not any(secret.encode() in body for secret in (password, wrong_password, setup_token))
-        return response.status, json.loads(body) if body else None, response.headers
+        return response.status, body if binary else json.loads(body) if body else None, response.headers
 
 
 def credentials(username, value=password):

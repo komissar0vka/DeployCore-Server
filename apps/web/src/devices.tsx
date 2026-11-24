@@ -346,6 +346,20 @@ function Computer({ id, session, t, back, inventory, openHistory, onSoftware }: 
     },
   })
 
+  const diagnostics = useMutation({
+    mutationFn: () => api<Blob>(`/devices/${id}/diagnostics/export`, {
+      method: 'POST', csrf: session.csrf_token, responseType: 'blob',
+    }),
+    onSuccess: blob => {
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'deploycore-agent-diagnostics.zip'
+      link.click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    },
+  })
+
   async function recover() {
     setIssuing(true)
     setProblem(null)
@@ -478,7 +492,12 @@ function Computer({ id, session, t, back, inventory, openHistory, onSoftware }: 
           : <EmptyState title={t('Создание заданий недоступно', 'Job creation unavailable')} />}
       </Panel>}
       {tab === 'events' && <Panel>
-        <h2 className="mb-3 text-lg font-semibold">{t('История событий', 'Event history')}</h2>
+        <SectionTitle title={t('История событий', 'Event history')}
+          actions={writable && <Action secondary disabled={diagnostics.isPending} onClick={() => diagnostics.mutate()}>
+            <ArrowDownToLine className="size-4" aria-hidden />
+            {t('Скачать сводку диагностики', 'Download diagnostic summary')}
+          </Action>} />
+        <FormError message={diagnostics.error && errorMessage(diagnostics.error, t)} />
         {computer.events.length ? <ActivityFeed items={computer.events.map(event => ({
           key: event.id, title: eventNames[event.action] ?? event.action, time: event.created_at,
         }))} /> : <EmptyState title={t('Событий пока нет', 'No events yet')} />}

@@ -1063,6 +1063,55 @@
         }
       }
     },
+    "/api/v1/devices/{device_id}/diagnostics/export": {
+      "post": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Export Diagnostics",
+        "operationId": "export_diagnostics_api_v1_devices__device_id__diagnostics_export_post",
+        "security": [
+          {
+            "DeployCoreSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/enrollment-tokens": {
       "get": {
         "tags": [
