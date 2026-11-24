@@ -100,6 +100,7 @@ def exercise_load(check, sql, compose, base, context, count, report):
         percentiles[name] = dict(p50_ms=round(median(times), 2), p95_ms=round(times[int(0.95*len(times))-1], 2),
                                  max_ms=round(times[-1], 2), operations_per_second=round(count/elapsed, 2))
 
+    transfer = None
     before = postgres()
     sampler = threading.Thread(target=sample)
     sampler.start()
@@ -118,6 +119,10 @@ def exercise_load(check, sql, compose, base, context, count, report):
         subprocess.run([*compose, "up", "-d", "--no-build", "--no-deps", "--wait", "--wait-timeout", "90", "server"],
                        check=True, stdout=subprocess.DEVNULL)
         batch("post_restart_heartbeat", heartbeat)
+        if artifact := os.environ.get("DEPLOYCORE_LOAD_ARTIFACT_MIB"):
+            from package_transfer_load import transfer_profile
+
+            transfer = transfer_profile(check, sql, compose, base, context, agents, int(artifact))
     finally:
         stop.set()
         sampler.join()
@@ -130,5 +135,7 @@ def exercise_load(check, sql, compose, base, context, count, report):
     assert samples and not sample_error, sample_error
     results = dict(simulated_agents=count, concurrency=32, profile=percentiles, docker_samples=samples,
                    postgres_delta={key: after[key]-before[key] for key in before})
+    if transfer is not None:
+        results["package_transfer"] = transfer
     Path(report).write_text(json.dumps(results, indent=2) + "\n")
     print(json.dumps({key: value for key, value in results.items() if key != "docker_samples"}))

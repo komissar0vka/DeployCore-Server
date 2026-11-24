@@ -210,3 +210,23 @@ jobs:
         run: |
           sudo python3 deploy/scripts/ci-upgrade-server.py "$RUNNER_TEMP/beta4" \
             "$RUNNER_TEMP/beta5/candidate.tar.gz" https://127.0.0.1:18449 1.0.0-beta.4 1.0.0-beta.5
+  package-transfer-load:
+    if: github.ref_name == 'beta5-validation'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        mib: [100, 1024]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Measure concurrent package downloads after reconnection
+        env:
+          DEPLOYCORE_LOAD_COUNT: '100'
+          DEPLOYCORE_LOAD_ARTIFACT_MIB: ${{ matrix.mib }}
+          DEPLOYCORE_LOAD_REPORT: ${{ runner.temp }}/transfer-load.json
+        run: deploy/scripts/smoke.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: transfer-load-${{ matrix.mib }}
+          path: ${{ runner.temp }}/transfer-load.json
