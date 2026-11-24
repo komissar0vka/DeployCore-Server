@@ -183,6 +183,29 @@ func TestPackagedAgentService(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		policy := filepath.Join(directory, "agent-update-publishers.json")
+		testPins := []byte(`{"certificate_sha256":["` + strings.Repeat("a", 64) + `"]}`)
+		if err := os.WriteFile(policy, testPins, 0600); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Remove(policy) })
+		unsigned := os.Getenv("DEPLOYCORE_TEST_MIGRATION_CURRENT")
+		payload, err := os.ReadFile(unsigned)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reject := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-File", migration,
+			"-Msi", unsigned, "-Sha256", fmt.Sprintf("%x", sha256.Sum256(payload)))
+		if output, err := reject.CombinedOutput(); err == nil || !strings.Contains(string(output), "valid Authenticode signature") {
+			t.Fatalf("strict publisher policy did not reject unsigned update: %v: %s", err, output)
+		}
+		unchanged, err := loadState(directory)
+		if err != nil || !reflect.DeepEqual(before, unchanged) {
+			t.Fatal("rejected update changed protected state")
+		}
+		if err := os.Remove(policy); err != nil {
+			t.Fatal(err)
+		}
 		for index, key := range []string{"DEPLOYCORE_TEST_MIGRATION_PREVIOUS", "DEPLOYCORE_TEST_MIGRATION_CURRENT"} {
 			msi := os.Getenv(key)
 			binary, err := os.ReadFile(msi)
