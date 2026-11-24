@@ -1,6 +1,8 @@
 name: DeployCore Server images and release bundle
 
 on:
+  push:
+    branches: [beta4-validation]
   workflow_dispatch:
 
 permissions:
@@ -9,7 +11,7 @@ permissions:
 
 jobs:
   images:
-    if: github.repository == 'komissar0vka/DeployCore-Server' && github.ref_type == 'tag'
+    if: github.repository == 'komissar0vka/DeployCore-Server' && (github.ref_type == 'tag' || github.ref_name == 'beta4-validation')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -17,16 +19,21 @@ jobs:
       - name: Verify client release tag and run regression tests
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$ ]]
-          grep -Fx "VERSION = \"$version\"" apps/server/deploycore/cloud_link.py
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$ ]]
+            grep -Fx "VERSION = \"$version\"" apps/server/deploycore/cloud_link.py
+          else
+            version="validation-${GITHUB_SHA:0:12}"
+          fi
+          printf 'VERSION=%s\n' "$version" >> "$GITHUB_ENV"
           deploy/scripts/smoke.sh
       - name: Build and push immutable Server images
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="$VERSION"
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           docker buildx build --platform linux/amd64 --push -f apps/server/Dockerfile \
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
@@ -34,11 +41,10 @@ jobs:
           docker buildx build --platform linux/amd64 --push -f deploy/Dockerfile.web \
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --tag "ghcr.io/komissar0vka/deploycore-server-web:$version" --metadata-file /tmp/web-image.json .
-          docker logout ghcr.io
       - name: Package the installation bundle
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="$VERSION"
           bundle="$RUNNER_TEMP/deploycore-server"
           mkdir -p "$bundle" "$RUNNER_TEMP/release"
           git archive HEAD -- install.sh README.md CHANGELOG.md apps/agent apps/server apps/web \
@@ -54,6 +60,19 @@ jobs:
           tar -C "$bundle" -czf "$RUNNER_TEMP/release/deploycore-server-$version.tar.gz" .
           cd "$RUNNER_TEMP/release"
           sha256sum "deploycore-server-$version.tar.gz" > SHA256SUMS
+      - name: Verify image-only installation and host backup
+        run: |
+          set -euo pipefail
+          target="$(mktemp -d /tmp/deploycore-installed-XXXXXXXX)"
+          tar -xzf "$RUNNER_TEMP/release/deploycore-server-$VERSION.tar.gz" -C "$target"
+          export DOCKER_CONFIG="$HOME/.docker"
+          export DEPLOYCORE_HTTPS_BIND=127.0.0.1
+          printf '127.0.0.1\n18448\n\n' |
+            sudo --preserve-env=DOCKER_CONFIG,DEPLOYCORE_HTTPS_BIND bash "$target/install.sh"
+          sudo python3 deploy/scripts/ci-installed-server.py "$target" https://127.0.0.1:18448
+      - name: Remove validation registry credentials
+        if: always()
+        run: docker logout ghcr.io
       - uses: actions/upload-artifact@v4
         with:
           name: deploycore-server-images
