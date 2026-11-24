@@ -105,7 +105,7 @@ func applyPortable(ctx context.Context, directory string, job Assignment, m Mani
 	if err != nil { return fail() }
 	shortcutFolder, err := portableDirectory(programs, "DeployCore Apps", install && m.Detection.Shortcut)
 	if err != nil && !errors.Is(err, os.ErrNotExist) { return fail() }
-	shortcut := filepath.Join(shortcutFolder, m.PackageID+".lnk")
+	shortcut := filepath.Join(shortcutFolder, m.Detection.Folder+".lnk")
 	linkHash, err := portableHash(shortcut)
 	if err != nil || (linkHash != "" && linkHash != receipt.ShortcutHash) { return fail() }
 	if install && hash == m.Hash && (linkHash != "") == m.Detection.Shortcut {

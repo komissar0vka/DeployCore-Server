@@ -12,6 +12,7 @@ if ([IO.Path]::GetExtension($msiFile) -ne '.msi' -or (Get-FileHash -LiteralPath 
 }
 $serviceName = 'DeployCoreAgent'
 $registered = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
+$managed = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'DeployCore Managed Agent\deploycore-agent.exe'
 $legacy = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'DeployCore\deploycore-agent.exe'
 $legacyDirectory = Split-Path -Parent $legacy
 $state = Join-Path $legacyDirectory 'state.dpapi'
@@ -19,7 +20,6 @@ $log = Join-Path $legacyDirectory ('DeployCore-MSI-' + [guid]::NewGuid().ToStrin
 $isLegacy = $false
 if ($registered) {
     $isLegacy = ($registered.PathName -ieq ('"' + $legacy + '" service')) -or ($registered.PathName -ieq ($legacy + ' service'))
-    $managed = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'DeployCore Managed Agent\deploycore-agent.exe'
     if (-not $isLegacy -and $registered.PathName -ine ('"' + $managed + '" service-msi') -and $registered.PathName -ine ($managed + ' service-msi')) {
         throw 'The existing service does not belong to a recognized DeployCore installation.'
     }
@@ -52,6 +52,12 @@ try {
     (Get-Service -Name $serviceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
     Write-Output "DeployCore Agent active. Log: $log"
 } catch {
+    if ($legacyRemoved) {
+        $candidate = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
+        if ($candidate -and ($candidate.PathName -ieq ('"' + $managed + '" service-msi') -or $candidate.PathName -ieq ($managed + ' service-msi'))) {
+            Start-Process msiexec.exe -ArgumentList @('/x', ('"' + $msiFile + '"'), '/qn', '/norestart') -Wait -PassThru | Out-Null
+        }
+    }
     if ($legacyRemoved -and -not (Get-Service -Name $serviceName -ErrorAction SilentlyContinue)) {
         New-Service -Name $serviceName -BinaryPathName ('"' + $legacy + '" service') -DisplayName 'DeployCore Agent' -StartupType Automatic | Out-Null
         Start-Service -Name $serviceName

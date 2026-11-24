@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends wixl \
 WORKDIR /src
 COPY apps/agent/go.mod apps/agent/go.sum ./
 RUN go mod download
-COPY apps/agent/*.go apps/agent/VERSION apps/agent/build.sh apps/agent/setup.ps1 apps/agent/agent.wxs ./
+COPY apps/agent/*.go apps/agent/VERSION apps/agent/build.sh apps/agent/setup.ps1 apps/agent/upgrade-agent.ps1 apps/agent/agent.wxs ./
 RUN ./build.sh /out
 
 FROM node:22-alpine AS build

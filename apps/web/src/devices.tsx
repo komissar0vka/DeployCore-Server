@@ -570,6 +570,7 @@ export function AgentInstallPage({ session, t, server, configuredAddress }: Prop
         <a className="inline-flex items-center gap-2 rounded-xl bg-accent px-3 py-2 font-semibold text-primary-foreground hover:bg-primary-hover" href="/assets/agent/deploycore-agent.msi" download><ArrowDownToLine className="size-4" aria-hidden />{t('MSI с ручной настройкой', 'MSI with manual setup')}</a>
         <a href="/assets/agent/deploycore-agent.exe" download>{t('Скачать Windows Agent', 'Download Windows Agent')}</a>
         <a href="/assets/agent/SHA256SUMS" download>SHA256SUMS</a>
+        <a href="/assets/agent/upgrade-agent.ps1" download>{t('Сценарий обновления службы', 'Service migration script')}</a>
         <a href="/assets/agent/build.json" download>{t('Сведения о сборке', 'Build information')}</a>
       </div>
       <p className="my-4 text-sm text-foreground">{t('После установки MSI откройте DeployCore Agent Setup в меню «Пуск». Введите адрес сервера и токен. Скачанный EXE также открывает мастер. Для команд откройте PowerShell от имени администратора в папке с EXE.', 'After installing the MSI, open DeployCore Agent Setup from Start. Enter the server and token. The downloaded EXE also opens the wizard. For commands, open PowerShell as administrator in the folder containing the EXE.')}</p>

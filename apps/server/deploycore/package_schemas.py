@@ -82,7 +82,7 @@ class DetectionGroup(Wire):
     rules: Annotated[list[DetectionLeaf], Field(min_length=2, max_length=8)]
 
 
-Detection = Annotated[MSIProduct | RegistrySoftware | FileExists | FileVersion | DetectionGroup, Field(discriminator="kind")]
+Detection = Annotated[MSIProduct | RegistrySoftware | FileExists | FileVersion | DetectionGroup | PortableFile, Field(discriminator="kind")]
 DetectionState = Literal["installed", "not_installed", "unknown"]
 
 

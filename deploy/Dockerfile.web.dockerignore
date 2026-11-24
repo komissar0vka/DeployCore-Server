@@ -21,3 +21,5 @@
 !apps/agent/build.sh
 !apps/agent/setup.ps1
 !apps/agent/agent.wxs
+
+!apps/agent/upgrade-agent.ps1

@@ -67,6 +67,9 @@ if [[ ! -e deploy/.env ]]; then
   )
 fi
 compose=(docker compose --env-file deploy/.env -f deploy/compose.yaml)
+if [[ -r deploy/.operations/compose.json ]]; then
+  compose+=(-f deploy/.operations/compose.json)
+fi
 if [[ -r deploy/.updater/active.json ]]; then
   "${compose[@]}" -f deploy/.updater/active.json up -d --no-build --wait --wait-timeout 180
 elif [[ -f deploy/release-images.json ]]; then
@@ -76,6 +79,9 @@ elif [[ -f deploy/release-images.json ]]; then
   "${compose[@]}" -f deploy/.updater/active.json up -d --pull always --no-build --wait --wait-timeout 180
 else
   "${compose[@]}" up -d --build --wait --wait-timeout 180
+fi
+if [[ -d /run/systemd/system && ! -r deploy/.operations/compose.json ]]; then
+  deploy/scripts/enable-operations.sh
 fi
 printf '\nВеб-панель: %s\n' "$(sed -n 's/^DEPLOYCORE_PANEL_URL=//p' deploy/.env)"
 printf 'Откройте мастер настройки. Он запросит DEPLOYCORE_SETUP_TOKEN из %s/deploy/.env.\n' "$PWD"

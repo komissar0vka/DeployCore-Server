@@ -435,6 +435,132 @@
         ]
       }
     },
+    "/api/v1/operations": {
+      "get": {
+        "tags": [
+          "Host operations"
+        ],
+        "summary": "State",
+        "operationId": "state_api_v1_operations_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationsView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeployCoreSession": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Host operations"
+        ],
+        "summary": "Submit",
+        "operationId": "submit_api_v1_operations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/BackupRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/UpdateRequest"
+                  }
+                ],
+                "title": "Data",
+                "discriminator": {
+                  "propertyName": "action",
+                  "mapping": {
+                    "backup": "#/components/schemas/BackupRequest",
+                    "update": "#/components/schemas/UpdateRequest"
+                  }
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeployCoreSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/operations/backups/{id}": {
+      "get": {
+        "tags": [
+          "Host operations"
+        ],
+        "summary": "Download",
+        "operationId": "download_api_v1_operations_backups__id__get",
+        "security": [
+          {
+            "DeployCoreSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/system/events": {
       "get": {
         "tags": [
@@ -4088,6 +4214,47 @@
         ],
         "title": "AuditView"
       },
+      "Backup": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "bytes",
+          "created_at"
+        ],
+        "title": "Backup"
+      },
+      "BackupRequest": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "const": "backup",
+            "title": "Action"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "title": "BackupRequest"
+      },
       "BatchInput": {
         "properties": {
           "mode": {
@@ -5641,6 +5808,9 @@
               },
               {
                 "$ref": "#/components/schemas/DetectionGroup"
+              },
+              {
+                "$ref": "#/components/schemas/PortableFile"
               }
             ],
             "title": "Detection",
@@ -5652,6 +5822,7 @@
                 "file_exists": "#/components/schemas/FileExists",
                 "file_version": "#/components/schemas/FileVersion",
                 "msi_product": "#/components/schemas/MSIProduct",
+                "portable_file": "#/components/schemas/PortableFile",
                 "registry_software": "#/components/schemas/RegistrySoftware"
               }
             }
@@ -5784,6 +5955,39 @@
           "architecture"
         ],
         "title": "OSInfo"
+      },
+      "OperationsView": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Status"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "backups": {
+            "items": {
+              "$ref": "#/components/schemas/Backup"
+            },
+            "type": "array",
+            "title": "Backups"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "available",
+          "status",
+          "backups"
+        ],
+        "title": "OperationsView"
       },
       "PackageDetail": {
         "properties": {
@@ -6109,6 +6313,32 @@
         "type": "object",
         "title": "PollReply"
       },
+      "PortableFile": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "portable_file",
+            "title": "Kind"
+          },
+          "folder": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]([A-Za-z0-9 _-]{0,62}[A-Za-z0-9])?$",
+            "title": "Folder"
+          },
+          "shortcut": {
+            "type": "boolean",
+            "title": "Shortcut",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "folder"
+        ],
+        "title": "PortableFile"
+      },
       "PreviewInput": {
         "properties": {
           "device_id": {
@@ -6189,6 +6419,9 @@
               },
               {
                 "$ref": "#/components/schemas/DetectionGroup"
+              },
+              {
+                "$ref": "#/components/schemas/PortableFile"
               }
             ],
             "title": "Rule",
@@ -6200,6 +6433,7 @@
                 "file_exists": "#/components/schemas/FileExists",
                 "file_version": "#/components/schemas/FileVersion",
                 "msi_product": "#/components/schemas/MSIProduct",
+                "portable_file": "#/components/schemas/PortableFile",
                 "registry_software": "#/components/schemas/RegistrySoftware"
               }
             }
@@ -6916,6 +7150,47 @@
         ],
         "title": "Software"
       },
+      "Status": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "backup",
+              "update"
+            ],
+            "title": "Action"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "checking",
+              "downloading",
+              "backing_up",
+              "applying",
+              "rolling_back",
+              "completed",
+              "failed",
+              "interrupted"
+            ],
+            "title": "Stage"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "action",
+          "stage"
+        ],
+        "title": "Status"
+      },
       "TargetView": {
         "properties": {
           "id": {
@@ -7286,6 +7561,37 @@
         ],
         "title": "TokenView"
       },
+      "UpdateRequest": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "const": "update",
+            "title": "Action"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "stable",
+              "beta"
+            ],
+            "title": "Channel"
+          },
+          "version": {
+            "type": "string",
+            "maxLength": 40,
+            "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-beta\\.[1-9][0-9]*)?$",
+            "title": "Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action",
+          "channel",
+          "version"
+        ],
+        "title": "UpdateRequest"
+      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -7407,6 +7713,9 @@
               },
               {
                 "$ref": "#/components/schemas/DetectionGroup"
+              },
+              {
+                "$ref": "#/components/schemas/PortableFile"
               }
             ],
             "title": "Detection",
@@ -7418,6 +7727,7 @@
                 "file_exists": "#/components/schemas/FileExists",
                 "file_version": "#/components/schemas/FileVersion",
                 "msi_product": "#/components/schemas/MSIProduct",
+                "portable_file": "#/components/schemas/PortableFile",
                 "registry_software": "#/components/schemas/RegistrySoftware"
               }
             }
@@ -7537,6 +7847,9 @@
               },
               {
                 "$ref": "#/components/schemas/DetectionGroup"
+              },
+              {
+                "$ref": "#/components/schemas/PortableFile"
               }
             ],
             "title": "Detection",
@@ -7548,6 +7861,7 @@
                 "file_exists": "#/components/schemas/FileExists",
                 "file_version": "#/components/schemas/FileVersion",
                 "msi_product": "#/components/schemas/MSIProduct",
+                "portable_file": "#/components/schemas/PortableFile",
                 "registry_software": "#/components/schemas/RegistrySoftware"
               }
             }

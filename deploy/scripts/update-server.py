@@ -20,9 +20,10 @@ from uuid import uuid4
 
 from release_images import read_images
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(os.environ.get("DEPLOYCORE_INSTALL_ROOT", Path(__file__).resolve().parents[2])).resolve()
 DEPLOY = ROOT / "deploy"
 STATE = DEPLOY / ".updater"
+OPERATIONS = DEPLOY / ".operations" / "compose.json"
 COMPOSE = ["docker", "compose", "--env-file", str(DEPLOY / ".env"), "-f", str(DEPLOY / "compose.yaml")]
 ARTIFACT_HOST = "github.com"
 ARTIFACT_PREFIX = "/komissar0vka/DeployCore-Releases/releases/download/"
@@ -32,7 +33,8 @@ VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(bet
 
 
 def compose(*args, override=None, **kwargs):
-    command = COMPOSE + (["-f", str(override)] if override else [])
+    command = COMPOSE + (["-f", str(OPERATIONS)] if OPERATIONS.is_file() else [])
+    command += ["-f", str(override)] if override else []
     return subprocess.run([*command, *args], check=True, **kwargs)
 
 
@@ -155,7 +157,8 @@ def backup(directory, restore_db):
             bundle.getmembers()
 
 
-def install(channel, version):
+def install(channel, version, progress=lambda _stage: None):
+    progress("checking")
     release = release_plan(channel, version)
     if not release:
         raise ValueError("Signed manifest does not include requested version")
@@ -173,6 +176,7 @@ def install(channel, version):
     work = STATE / (version + "-" + suffix)
     work.mkdir()
     archive, source = work / "release.tar.gz", work / "source"
+    progress("downloading")
     download(release, archive)
     extract(archive, source)
     old_images = {}
@@ -195,9 +199,11 @@ def install(channel, version):
     attempt_started = False
     try:
         compose("stop", "web", "server")
+        progress("backing_up")
         backup(work, restore_db)
         backup_complete = True
         attempt_started = True
+        progress("applying")
         compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "180", "server", override=candidate)
         running_version = compose("exec", "-T", "server", "python", "-c",
                                   "from deploycore.cloud_link import VERSION; print(VERSION)",
@@ -206,6 +212,7 @@ def install(channel, version):
             raise ValueError("Running version differs from signed manifest")
         compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "90", "web", override=candidate)
     except (OSError, ValueError, subprocess.SubprocessError, KeyboardInterrupt):
+        progress("rolling_back")
         if backup_complete and attempt_started:
             compose("stop", "web", "server", override=candidate)
             sql('BEGIN;\nALTER DATABASE :"current" RENAME TO :"failed";\nALTER DATABASE :"restore" RENAME TO :"current";\nCOMMIT;\n',

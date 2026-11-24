@@ -8,6 +8,8 @@
       <RegistrySearch Id="ExistingService" Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\DeployCoreAgent"
                       Name="ImagePath" Type="raw" Win64="yes"/>
     </Property>
+    <Property Id="OLDERDEPLOYCOREMSI" Secure="yes"/>
+    <Property Id="CURRENTORNEWERDEPLOYCOREMSI" Secure="yes"/>
     <Upgrade Id="AACB9A3E-8675-4FEB-9063-E53D0ACA5122">
       <UpgradeVersion Maximum="$(var.Version)" IncludeMaximum="no" Property="OLDERDEPLOYCOREMSI"/>
       <UpgradeVersion Minimum="$(var.Version)" IncludeMinimum="yes" OnlyDetect="yes" Property="CURRENTORNEWERDEPLOYCOREMSI"/>

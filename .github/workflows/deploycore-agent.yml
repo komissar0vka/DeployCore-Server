@@ -56,6 +56,23 @@ jobs:
         with:
           name: deploycore-agent-windows-amd64
           path: agent-artifact
+      - name: Exercise Windows file operations with publisher WinScan2PDF binaries
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'portable-fixtures'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          foreach ($file in @('WinScan2PDF','WinScan2PDF_Portable')) {
+            $zip = Join-Path $root ($file + '.zip')
+            Invoke-WebRequest "https://www.softwareok.com/Download/$file.zip" -OutFile $zip
+            Expand-Archive -LiteralPath $zip -DestinationPath $root -Force
+          }
+          $env:DEPLOYCORE_TEST_PORTABLE_EXE = Join-Path $root 'WinScan2PDF.exe'
+          $env:DEPLOYCORE_TEST_PORTABLE_UPDATE = Join-Path $root 'WinScan2PDF_p.exe'
+          Push-Location apps/agent
+          try {
+            go test -run '^TestWinScanPortableLifecycle$' -count=1 -timeout 2m
+            if ($LASTEXITCODE -ne 0) { throw 'Portable lifecycle failed' }
+          } finally { Pop-Location }
       - name: Exercise MSI lifecycle on Windows
         shell: pwsh
         working-directory: agent-artifact

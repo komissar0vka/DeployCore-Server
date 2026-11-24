@@ -21,6 +21,8 @@ export function errorMessage(error: unknown, t: Translate) {
     setup_token_invalid: t('Секрет настройки неверен.', 'The setup secret is incorrect.'),
     invalid_credentials: t('Неверное имя пользователя или пароль.', 'Incorrect username or password.'),
     login_limited: t('Слишком много попыток. Повторите вход через 10 минут.', 'Too many attempts. Try again in 10 minutes.'),
+    host_operations_unavailable: t('Операции хоста недоступны.', 'Host operations are unavailable.'),
+    host_operation_in_progress: t('Дождитесь завершения текущей операции.', 'Wait for the current operation to finish.'),
     cloud_origin_invalid: t('Укажи HTTPS-адрес Cloud без пути.', 'Enter an HTTPS Cloud address without a path.'),
     cloud_keys_mismatch: t('Ключи Cloud не совпадают с введёнными.', 'Cloud keys differ from the pinned keys.'),
     invalid_cloud_ca: t('Загрузи публичный сертификат без приватного ключа.', 'Upload a public certificate without a private key.'),

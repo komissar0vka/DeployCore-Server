@@ -6,3 +6,4 @@ dist/
 .pytest_cache/
 /deploy/tls/
 /deploy/.updater/
+/deploy/.operations/

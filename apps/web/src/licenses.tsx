@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
 import { api, pollEvery, type Session } from './api'
+import { HostOperations } from './operations'
 import { LoadingSkeleton, SectionTitle, StatusBadge } from './design'
 import { Action, Field, FormError, Panel, errorMessage, type Translate } from './ui'
 
@@ -25,6 +26,7 @@ export function LicensesPage({ session, t }: { session: Session; t: Translate })
   const [problem, setProblem] = useState('')
   const [cloudOpen, setCloudOpen] = useState(false)
   const [cloudProblem, setCloudProblem] = useState('')
+  const [selectedRelease, setSelectedRelease] = useState('')
   const [channel, setChannel] = useState<'stable' | 'beta'>('stable')
   const updates = useMutation({ mutationFn: (choice: string) => api<Updates>(`/licenses/updates/${choice}`) })
   const query = useQuery({ queryKey: ['license'], queryFn: () => api<License>('/licenses'), refetchInterval: pollEvery(15_000) })
@@ -93,7 +95,7 @@ export function LicensesPage({ session, t }: { session: Session; t: Translate })
       <label className="grid max-w-xs gap-2 text-sm">
         {t('Канал релизов', 'Release channel')}
         <select className="input" value={channel} onChange={event => {
-          setChannel(event.target.value as 'stable' | 'beta'); updates.reset()
+          setChannel(event.target.value as 'stable' | 'beta'); updates.reset(); setSelectedRelease('')
         }}>
           <option value="stable">Stable</option><option value="beta">Beta</option>
         </select>
@@ -111,6 +113,8 @@ export function LicensesPage({ session, t }: { session: Session; t: Translate })
           : <p>{t('В этом канале релизов пока нет.', 'This channel has no releases yet.')}</p>}
       </div>}
     </Panel>
+    {session.user.role === 'super_admin' && selectedRelease &&
+      <HostOperations t={t} session={session} update={{ action: 'update', channel, version: selectedRelease }} />}
     {session.user.role === 'super_admin' && <Panel>
       <SectionTitle title={t('Подключение к Cloud', 'Cloud connection')} actions={
         <Action secondary onClick={() => { activate.reset(); setCloudOpen(value => !value) }}>

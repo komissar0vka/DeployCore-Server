@@ -68,7 +68,7 @@ grep -q '<title>DeployCore' "$scratch/index.html"
 asset="$(sed -nE 's/.*src="(\/assets\/[^"]+\.js)".*/\1/p' "$scratch/index.html")"
 test -n "$asset"
 request --fail "$base$asset" > /dev/null
-for agent_artifact in deploycore-agent.exe deploycore-agent.msi SHA256SUMS build.json; do
+for agent_artifact in deploycore-agent.exe deploycore-agent.msi upgrade-agent.ps1 SHA256SUMS build.json; do
     request --fail "$base/assets/agent/$agent_artifact" > "$scratch/$agent_artifact"
 done
 (cd "$scratch" && sha256sum -c SHA256SUMS)

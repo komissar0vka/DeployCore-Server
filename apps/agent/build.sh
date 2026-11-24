@@ -14,11 +14,12 @@ go build -mod=readonly -trimpath -buildvcs=false -o "$output/deploycore-agent.ex
     esac
     toolchain="$(go env GOVERSION)"
     cp agent.wxs "$output/agent.wxs"
+    cp upgrade-agent.ps1 "$output/upgrade-agent.ps1"
     cd "$output"
     wixl -a x64 -D "Version=$version" -D "Source=deploycore-agent.exe" \
         -o deploycore-agent.msi agent.wxs
     rm agent.wxs
-    sha256sum deploycore-agent.exe deploycore-agent.msi > SHA256SUMS
+    sha256sum deploycore-agent.exe deploycore-agent.msi upgrade-agent.ps1 > SHA256SUMS
     printf '{"version":"%s","commit":"%s","go":"%s","os":"windows","architecture":"amd64"}\n' \
         "$version" "$commit" "$toolchain" > build.json
 )

@@ -78,7 +78,7 @@ func (handler serviceHandler) Execute(_ []string, changes <-chan svc.ChangeReque
 	go func() { defer close(done); runner.run(ctx) }()
 	running := svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 	statuses <- running
-	logger.Printf("Service started, version %s", version)
+	logger.Printf("Service started: version=%s managed_msi=%t enrollment_present=%t", version, handler.managedMSI, state.DeviceID != "")
 	for {
 		select {
 		case change, ok := <-changes:

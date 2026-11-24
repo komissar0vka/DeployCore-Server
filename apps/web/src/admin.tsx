@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ClipboardList, Plus, UserRound } from 'lucide-react'
 import { ActivityFeed, EmptyState, LoadingSkeleton, SectionTitle, StatusBadge } from './design'
 import { Dialog } from './components/ui/dialog'
+import { HostOperations } from "./operations"
 import { useState, type FormEvent } from 'react'
 import { api, type AuditEvent, type Role, type Session, type Settings, type User } from './api'
 import { Action, Field, FormError, Panel, errorMessage, roleLabels, type Translate } from './ui'
@@ -88,6 +89,7 @@ export function SettingsPage({ settings, session, t, health }: Context & { setti
         {health}
       </Panel>
       {writable && <ServerDiagnostics t={t} />}
+      {writable && <HostOperations session={session} t={t} />}
     </div>
   </div>
 }

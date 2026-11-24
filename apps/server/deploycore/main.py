@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from .cloud_link import VERSION, poll
 from .body_limit import AgentBodyLimit
+from .operations_api import router as operations_router
 from .agent_package_api import router as agent_package_router
 from .device_api import router as device_router
 from .database import create_database_engine
@@ -51,6 +52,7 @@ app = FastAPI(
 )
 app.include_router(health_router)
 app.include_router(system_router)
+app.include_router(operations_router)
 app.include_router(runtime_router)
 app.include_router(device_router)
 app.include_router(group_router)
