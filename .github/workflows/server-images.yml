@@ -69,7 +69,30 @@ jobs:
           export DEPLOYCORE_HTTPS_BIND=127.0.0.1
           printf '127.0.0.1\n18448\n\n' |
             sudo --preserve-env=DOCKER_CONFIG,DEPLOYCORE_HTTPS_BIND bash "$target/install.sh"
-          sudo python3 deploy/scripts/ci-installed-server.py "$target" https://127.0.0.1:18448
+          sudo python3 deploy/scripts/ci-installed-server.py "$target" https://127.0.0.1:18448 "$RUNNER_TEMP/ux-login.json"
+      - name: Capture hosted Chromium screenshots
+        run: |
+          set -euo pipefail
+          npm --prefix "$RUNNER_TEMP/ux" install --no-package-lock --no-save playwright@1.58.2
+          export NODE_PATH="$RUNNER_TEMP/ux/node_modules"
+          export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/playwright"
+          "$RUNNER_TEMP/ux/node_modules/.bin/playwright" install --with-deps chromium
+          mkdir "$RUNNER_TEMP/screenshots"
+          sudo --preserve-env=NODE_PATH,PLAYWRIGHT_BROWSERS_PATH node deploy/scripts/ci-screenshots.cjs \
+            "$RUNNER_TEMP/ux-login.json" "$RUNNER_TEMP/screenshots"
+      - name: Verify beta.3 image-based upgrade and forced rollback
+        run: |
+          set -euo pipefail
+          target="$(mktemp -d /tmp/deploycore-beta3-XXXXXXXX)"
+          curl -fsSL https://github.com/komissar0vka/DeployCore-Releases/releases/download/v1.0.0-beta.3/deploycore-server-1.0.0-beta.3.tar.gz |
+            tar -xzf - -C "$target"
+          export DOCKER_CONFIG="$HOME/.docker"
+          export COMPOSE_PROJECT_NAME=deploycore-hosted-upgrade
+          export DEPLOYCORE_HTTPS_BIND=127.0.0.1
+          printf '127.0.0.1\n18449\n\n' |
+            sudo --preserve-env=DOCKER_CONFIG,COMPOSE_PROJECT_NAME,DEPLOYCORE_HTTPS_BIND bash "$target/install.sh"
+          sudo --preserve-env=DOCKER_CONFIG,COMPOSE_PROJECT_NAME,DEPLOYCORE_HTTPS_BIND python3 deploy/scripts/ci-upgrade-server.py \
+            "$target" "$RUNNER_TEMP/release/deploycore-server-$VERSION.tar.gz" https://127.0.0.1:18449
       - name: Remove validation registry credentials
         if: always()
         run: docker logout ghcr.io
@@ -77,4 +100,9 @@ jobs:
         with:
           name: deploycore-server-images
           path: ${{ runner.temp }}/release/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deploycore-beta4-ux
+          path: ${{ runner.temp }}/screenshots/
           if-no-files-found: error

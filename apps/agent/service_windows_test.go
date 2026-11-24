@@ -1,14 +1,18 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -59,7 +63,7 @@ func TestPackagedAgentService(t *testing.T) {
 		default:
 		}
 	}
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
@@ -100,6 +104,15 @@ func TestPackagedAgentService(t *testing.T) {
 			}
 		}
 	}))
+	migration := os.Getenv("DEPLOYCORE_TEST_MIGRATION_SCRIPT")
+	if migration != "" {
+		_ = server.Listener.Close()
+		server.Listener, err = net.Listen("tcp", "127.0.0.1:17777")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	server.StartTLS()
 	defer server.Close()
 
 	file := filepath.Join(t.TempDir(), "trust.pem")
@@ -160,4 +173,39 @@ func TestPackagedAgentService(t *testing.T) {
 		t.Fatal("service enrolled again after restart")
 	default:
 	}
+	if migration != "" {
+		_ = service.Close()
+		before, err := loadState(directory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []string{"DEPLOYCORE_TEST_MIGRATION_PREVIOUS", "DEPLOYCORE_TEST_MIGRATION_CURRENT"} {
+			msi := os.Getenv(key)
+			binary, err := os.ReadFile(msi)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = exec.Command("msiexec.exe", "/x", msi, "/qn", "/norestart").Run() })
+			select {
+			case <-pulse:
+			default:
+			}
+			command := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-File", migration,
+				"-Msi", msi, "-Sha256", fmt.Sprintf("%x", sha256.Sum256(binary)))
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("MSI transition failed: %v: %s", err, output)
+			}
+			wait("heartbeat after MSI upgrade", pulse)
+			after, err := loadState(directory)
+			if err != nil || !reflect.DeepEqual(before, after) {
+				t.Fatal("MSI changed the stored registration, certificate, or credential")
+			}
+			select {
+			case <-enrolled:
+				t.Fatal("MSI enrolled an existing agent a second time")
+			default:
+			}
+		}
+	}
+
 }

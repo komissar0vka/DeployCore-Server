@@ -26,6 +26,15 @@ jobs:
       - run: GOOS=windows GOARCH=amd64 go vet ./...
       - run: sudo apt-get update && sudo apt-get install -y wixl
       - run: ./build.sh dist
+      - name: Build configured MSI fixtures for service migration
+        run: |
+          set -euo pipefail
+          cp configured-agent.wxs dist/configured-agent.wxs
+          cd dist
+          printf '%s' '{"server":"https://127.0.0.1:17777","token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' > enrollment.json
+          wixl -a x64 -D Version=0.3.7 -o migration-previous.msi configured-agent.wxs
+          wixl -a x64 -D "Version=$(cat ../VERSION)" -o migration-current.msi configured-agent.wxs
+          rm configured-agent.wxs enrollment.json
       - uses: actions/upload-artifact@v4
         with:
           name: deploycore-agent-windows-amd64
@@ -85,6 +94,9 @@ jobs:
           & $agent check --server https://127.0.0.1:1
           if ($LASTEXITCODE -eq 0) { throw 'An unavailable endpoint passed the readiness check' }
           $env:DEPLOYCORE_TEST_PACKAGED_AGENT = $agent
+          $env:DEPLOYCORE_TEST_MIGRATION_PREVIOUS = Join-Path (Get-Location) 'migration-previous.msi'
+          $env:DEPLOYCORE_TEST_MIGRATION_CURRENT = Join-Path (Get-Location) 'migration-current.msi'
+          $env:DEPLOYCORE_TEST_MIGRATION_SCRIPT = Join-Path (Get-Location) 'upgrade-agent.ps1'
           Push-Location ../apps/agent
           try {
             go test -run '^TestPackagedAgentService$' -count=1 -timeout 4m

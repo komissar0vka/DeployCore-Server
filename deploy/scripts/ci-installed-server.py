@@ -59,3 +59,8 @@ archive = call("/operations/backups/" + queued["id"], raw=True)
 with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as files:
     assert {"database.dump", "packages.tar", "cloud.tar", "tls.tar", "configuration.tar.gz"} <= set(files.getnames())
 print("Fresh image-only installation, initial settings, host backup and authorized download verified")
+
+if len(sys.argv) > 3:
+    fixture = Path(sys.argv[3])
+    fixture.write_text(json.dumps({"origin": origin, **credentials}))
+    fixture.chmod(0o600)
