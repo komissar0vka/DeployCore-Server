@@ -5,13 +5,13 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from . import schemas
 from .models import AuditEvent, Installation, LoginSession, User
 from .security import (
-    ActiveSession, COOKIE, COOKIE_ATTRIBUTES, Db, LOGIN_WINDOW, PASSWORDS, Permission,
+    ActiveSession, COOKIE, COOKIE_ATTRIBUTES, Db, IDLE_TIMEOUT, LOGIN_WINDOW, PASSWORDS, Permission,
     audit, digest, effective_expiry, issue_session, prune_sessions, require, require_same_origin, throttle_login, verify_password,
 )
 
@@ -96,6 +96,36 @@ def get_session(active: ActiveSession, db: Db) -> schemas.SessionView:
     return schemas.SessionView(
         user=schemas.PublicUser.model_validate(user), csrf_token=csrf, expires_at=effective_expiry(session),
     )
+
+
+@router.get("/auth/sessions", tags=["Auth"])
+def list_my_sessions(active: ActiveSession, db: Db) -> list[schemas.ActiveSessionView]:
+    user, current, _ = active
+    now = datetime.now(UTC)
+    db.flush()
+    rows = db.scalars(select(LoginSession).where(
+        LoginSession.user_id == user.id, LoginSession.expires_at > now,
+        LoginSession.last_seen_at > now - IDLE_TIMEOUT,
+    ).order_by(LoginSession.last_seen_at.desc()).limit(100))
+    result = [schemas.ActiveSessionView(
+        current=row.token_hash == current.token_hash,
+        last_seen_at=row.last_seen_at, expires_at=effective_expiry(row),
+    ) for row in rows]
+    db.commit()
+    return result
+
+
+@router.delete("/auth/sessions/others", tags=["Auth"], status_code=204, response_class=Response)
+def revoke_other_sessions(active: ActiveSession, request: Request, db: Db) -> None:
+    user, current, _ = active
+    if not db.scalar(text("SELECT pg_try_advisory_xact_lock(4, hashtext(:user_id))"), {"user_id": str(user.id)}):
+        raise HTTPException(409, "session_revocation_in_progress")
+    removed = db.execute(delete(LoginSession).where(
+        LoginSession.user_id == user.id, LoginSession.token_hash != current.token_hash,
+    )).rowcount
+    if removed:
+        audit(db, request, "other_sessions_revoked", actor=user, details={"count": str(removed)})
+    db.commit()
 
 
 @router.post("/auth/logout", tags=["Auth"], status_code=204, response_class=Response)

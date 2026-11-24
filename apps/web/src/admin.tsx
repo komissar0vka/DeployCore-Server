@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ClipboardList, Plus, UserRound } from 'lucide-react'
-import { ActivityFeed, EmptyState, LoadingSkeleton, SectionTitle, StatusBadge } from './design'
+import { ActivityFeed, ConfirmDialog, EmptyState, LoadingSkeleton, SectionTitle, StatusBadge } from './design'
 import { Dialog } from './components/ui/dialog'
 import { HostOperations } from "./operations"
 import { useState, type FormEvent } from 'react'
@@ -37,6 +37,38 @@ function ServerDiagnostics({ t }: { t: Translate }) {
           </li>)}
         </ul>}
     </>}
+  </Panel>
+}
+
+function AccountSessions({ session, t }: Context) {
+  const [confirm, setConfirm] = useState(false)
+  const client = useQueryClient()
+  const key = ['account-sessions', session.user.id]
+  const sessions = useQuery({
+    queryKey: key,
+    queryFn: () => api<{ current: boolean; last_seen_at: string; expires_at: string }[]>('/auth/sessions'),
+  })
+  const revoke = useMutation({
+    mutationFn: () => api<void>('/auth/sessions/others', { method: 'DELETE', csrf: session.csrf_token }),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: key }) },
+  })
+  const date = (value: string) => new Date(value).toLocaleString()
+  return <Panel>
+    <SectionTitle title={t('Мои сеансы', 'My sessions')}
+      actions={<Action secondary disabled={!sessions.data?.some(row => !row.current) || revoke.isPending}
+        onClick={() => setConfirm(true)}>{t('Завершить остальные', 'Sign out other sessions')}</Action>} />
+    <FormError message={(sessions.error || revoke.error) && errorMessage(sessions.error || revoke.error, t)} />
+    {sessions.isPending && <LoadingSkeleton label={t('Загрузка сеансов', 'Loading sessions')} />}
+    <ul className="divide-y divide-border text-sm">
+      {sessions.data?.map((row, index) => <li className="flex flex-wrap justify-between gap-2 py-2" key={index}>
+        <span>{row.current ? t('Текущий сеанс', 'Current session') : t('Другой сеанс', 'Other session')}</span>
+        <span className="text-muted-foreground">{date(row.last_seen_at)} · {t('до', 'until')} {date(row.expires_at)}</span>
+      </li>)}
+    </ul>
+    {confirm && <ConfirmDialog title={t('Завершить другие сеансы?', 'Sign out other sessions?')}
+      description={t('Текущий сеанс останется активным.', 'This session stays active.')}
+      labels={{ close: t('Закрыть', 'Close'), cancel: t('Отмена', 'Cancel'), confirm: t('Завершить', 'Sign out') }}
+      close={() => setConfirm(false)} confirm={() => { setConfirm(false); revoke.mutate() }} />}
   </Panel>
 }
 
@@ -88,6 +120,7 @@ export function SettingsPage({ settings, session, t, health }: Context & { setti
         <div className="mb-3 flex justify-between gap-3 text-sm"><span className="text-muted-foreground">{t('Версия DeployCore', 'DeployCore version')}</span><span className="font-mono text-info">{settings.version}</span></div>
         {health}
       </Panel>
+      <AccountSessions session={session} t={t} />
       {writable && <ServerDiagnostics t={t} />}
       {writable && <HostOperations session={session} t={t} />}
     </div>

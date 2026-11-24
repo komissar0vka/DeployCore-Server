@@ -71,6 +71,12 @@ class SessionView(BaseModel):
     expires_at: datetime
 
 
+class ActiveSessionView(BaseModel):
+    current: bool
+    last_seen_at: datetime
+    expires_at: datetime
+
+
 class CreateUser(BaseModel):
     username: Username
     password: NewPassword

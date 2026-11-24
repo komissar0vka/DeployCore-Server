@@ -149,6 +149,15 @@ subprocess.run([*compose, "restart", "server"], check=True, stdout=subprocess.DE
 subprocess.run([*compose, "up", "-d", "--no-build", "--wait", "--wait-timeout", "90"], check=True, stdout=subprocess.DEVNULL)
 assert check("/setup", {200})[1]["configured"]
 assert check("/auth/session", {200}, cookie=admin_cookie)[1]["user"] == admin
+other_cookie, _, _ = login("admin")
+sessions = check("/auth/sessions", {200}, cookie=admin_cookie)[1]
+assert len(sessions) >= 2 and sum(item["current"] for item in sessions) == 1
+assert all(set(item) == {"current", "last_seen_at", "expires_at"} for item in sessions)
+check("/auth/sessions/others", {403}, method="DELETE", cookie=admin_cookie)
+check("/auth/sessions/others", {204}, method="DELETE", cookie=admin_cookie, csrf=csrf)
+check("/auth/session", {401}, cookie=other_cookie)
+check("/auth/session", {200}, cookie=admin_cookie)
+
 assert check("/settings", {200}, cookie=admin_cookie)[1]["language"] == "en"
 print("Setup race, migrations on restart, session security, roles, login limits, settings and audit passed")
 

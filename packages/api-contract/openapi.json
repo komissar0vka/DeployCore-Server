@@ -184,6 +184,55 @@
         ]
       }
     },
+    "/api/v1/auth/sessions": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "List My Sessions",
+        "operationId": "list_my_sessions_api_v1_auth_sessions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ActiveSessionView"
+                  },
+                  "type": "array",
+                  "title": "Response List My Sessions Api V1 Auth Sessions Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeployCoreSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/sessions/others": {
+      "delete": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Revoke Other Sessions",
+        "operationId": "revoke_other_sessions_api_v1_auth_sessions_others_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "DeployCoreSession": []
+          }
+        ]
+      }
+    },
     "/api/v1/auth/logout": {
       "post": {
         "tags": [
@@ -4173,6 +4222,31 @@
   },
   "components": {
     "schemas": {
+      "ActiveSessionView": {
+        "properties": {
+          "current": {
+            "type": "boolean",
+            "title": "Current"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Seen At"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "current",
+          "last_seen_at",
+          "expires_at"
+        ],
+        "title": "ActiveSessionView"
+      },
       "AgentIssue": {
         "properties": {
           "action": {
