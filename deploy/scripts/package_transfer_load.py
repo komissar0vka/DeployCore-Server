@@ -86,3 +86,37 @@ print(digest.hexdigest())
                 aggregate_mib_per_second=round(size*len(times)/elapsed/(1024*1024), 2),
                 median_seconds=round(median(times), 3), max_seconds=round(max(times), 3),
                 package_filesystem_available_kib=int(disk[3]))
+
+
+def verify_low_space_rejection(compose, base, context, admin):
+    """Use an artificial reserve far above available space, without filling the runner."""
+    from urllib.error import HTTPError
+    from time import sleep
+    import os
+
+    reserve_mib = 1_048_576
+    env = {**os.environ, "DEPLOYCORE_PACKAGE_RESERVE_MIB": str(reserve_mib)}
+    subprocess.run([*compose, "up", "-d", "--no-build", "--no-deps", "--wait", "--wait-timeout", "90", "server"],
+                   env=env, check=True, stdout=subprocess.DEVNULL)
+    opener = build_opener(ProxyHandler({}), HTTPSHandler(context=context))
+    request = Request(base + "/api/v1/packages/intakes?filename=low-space.exe", data=b"bounded probe", method="POST",
+                      headers={"Origin": base, "Cookie": admin["cookie"], "X-CSRF-Token": admin["csrf"],
+                               "Content-Type": "application/octet-stream", "X-DeployCore-Request": "1"})
+    for _ in range(8):
+        try:
+            with opener.open(request, timeout=10):
+                raise AssertionError("Catalog accepted an upload below the storage reserve")
+        except HTTPError as error:
+            with error:
+                if error.code == 502:
+                    sleep(1)
+                    continue
+                assert error.code == 507, (error.code, error.read()[:100])
+                assert json.load(error)["detail"] == "package_storage_full"
+                remaining = subprocess.check_output([
+                    *compose, "exec", "-T", "server", "python", "-c",
+                    "from deploycore.package_storage import storage_root; print(len(list(storage_root().glob('.part-*'))))",
+                ], text=True).strip()
+                assert remaining == "0"
+                return {"http_status": 507, "reserve_mib": reserve_mib, "partial_uploads": int(remaining)}
+    raise RuntimeError("Catalog did not respond after test container restart")

@@ -14,7 +14,7 @@ import subprocess
 import threading
 
 
-def exercise_load(check, sql, compose, base, context, count, report):
+def exercise_load(check, sql, compose, base, context, count, report, admin):
     if count not in {100, 500, 1000} or os.environ.get("GITHUB_ACTIONS") != "true":
         raise RuntimeError("Load checks require an isolated GitHub Actions matrix job")
 
@@ -136,6 +136,9 @@ def exercise_load(check, sql, compose, base, context, count, report):
     results = dict(simulated_agents=count, concurrency=32, profile=percentiles, docker_samples=samples,
                    postgres_delta={key: after[key]-before[key] for key in before})
     if transfer is not None:
+        from package_transfer_load import verify_low_space_rejection
+
         results["package_transfer"] = transfer
+        results["low_space"] = verify_low_space_rejection(compose, base, context, admin)
     Path(report).write_text(json.dumps(results, indent=2) + "\n")
     print(json.dumps({key: value for key, value in results.items() if key != "docker_samples"}))
