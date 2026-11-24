@@ -19,7 +19,8 @@ RUN python -m pip install --only-binary=:all: --no-cache-dir --target /opt/deplo
 FROM python:3.12-alpine3.24
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/opt/deploycore/python
 WORKDIR /app
-RUN apk add --no-cache ca-certificates openssl msitools \
+RUN apk upgrade --no-cache \
+    && apk add --no-cache ca-certificates openssl msitools \
     && addgroup -S -g 10001 deploycore \
     && adduser -S -D -H -u 10001 -G deploycore deploycore \
     && install -d -m 0700 -o deploycore /var/lib/deploycore/packages /var/lib/deploycore/cloud

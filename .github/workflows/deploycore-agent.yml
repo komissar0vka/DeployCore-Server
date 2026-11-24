@@ -35,7 +35,8 @@ jobs:
           curl -fsSL --retry 3 "$base/deploycore-server-1.0.0-beta.4.tar.gz" -o "$archive"
           printf '%s  %s\n' 5f1cfb93c4777a05450e06da8caf7f738307984bdaf39d8775c581fc40f7fa3c "$archive" | sha256sum -c -
           images="$(tar -xOf "$archive" ./deploy/release-image-ids.json)"
-          tar -xOf "$archive" ./deploy/release-images.tar.gz | docker load
+          tar -xOf "$archive" ./deploy/release-images.tar.gz > "$RUNNER_TEMP/beta4-images.tar.gz"
+          docker load --input "$RUNNER_TEMP/beta4-images.tar.gz"
           image="$(jq -er .server <<<"$images")"
           container="$(docker create "$image")"
           trap 'docker rm "$container" >/dev/null' EXIT
