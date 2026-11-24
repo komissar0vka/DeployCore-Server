@@ -26,15 +26,37 @@ jobs:
       - run: GOOS=windows GOARCH=amd64 go vet ./...
       - run: sudo apt-get update && sudo apt-get install -y wixl
       - run: ./build.sh dist
+      - name: Retrieve the existing 0.3.8 Windows binaries from public beta.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/published-beta4.tar.gz"
+          base=https://github.com/komissar0vka/DeployCore-Releases/releases/download/v1.0.0-beta.4
+          curl -fsSL --retry 3 "$base/deploycore-server-1.0.0-beta.4.tar.gz" -o "$archive"
+          printf '%s  %s\n' 5f1cfb93c4777a05450e06da8caf7f738307984bdaf39d8775c581fc40f7fa3c "$archive" | sha256sum -c -
+          images="$(tar -xOf "$archive" ./deploy/release-image-ids.json)"
+          tar -xOf "$archive" ./deploy/release-images.tar.gz | docker load
+          image="$(jq -er .server <<<"$images")"
+          container="$(docker create "$image")"
+          trap 'docker rm "$container" >/dev/null' EXIT
+          docker cp "$container:/opt/deploycore/agent/deploycore-agent.exe" "$RUNNER_TEMP/deploycore-agent-0.3.8.exe"
+          docker cp "$container:/opt/deploycore/agent/configured-agent.wxs" "$RUNNER_TEMP/configured-agent-0.3.8.wxs"
+          docker cp "$container:/opt/deploycore/agent/VERSION" "$RUNNER_TEMP/published-agent-version"
+          test "$(cat "$RUNNER_TEMP/published-agent-version")" = 0.3.8
       - name: Build configured MSI fixtures for service migration
         run: |
           set -euo pipefail
-          cp configured-agent.wxs dist/configured-agent.wxs
-          cd dist
+          fixture=$(mktemp -d)
+          cp "$RUNNER_TEMP/deploycore-agent-0.3.8.exe" "$fixture/deploycore-agent.exe"
+          cp "$RUNNER_TEMP/configured-agent-0.3.8.wxs" "$fixture/configured-agent.wxs"
+          cp "$RUNNER_TEMP/deploycore-agent-0.3.8.exe" dist/deploycore-agent-0.3.8.exe
+          dist="$(realpath dist)"
+          cd "$fixture"
           printf '%s' '{"server":"https://127.0.0.1:17777","token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' > enrollment.json
-          wixl -a x64 -D Version=0.3.7 -o migration-previous.msi configured-agent.wxs
-          wixl -a x64 -D "Version=$(cat ../VERSION)" -o migration-current.msi configured-agent.wxs
-          rm configured-agent.wxs enrollment.json
+          wixl -a x64 -D Version=0.3.8 -o "$dist/migration-previous.msi" configured-agent.wxs
+          cp "$dist/deploycore-agent.exe" ./deploycore-agent.exe
+          cp "$dist/../configured-agent.wxs" ./configured-agent.wxs
+          wixl -a x64 -D "Version=$(cat "$dist/../VERSION")" -o "$dist/migration-current.msi" configured-agent.wxs
       - uses: actions/upload-artifact@v4
         with:
           name: deploycore-agent-windows-amd64
@@ -98,6 +120,7 @@ jobs:
           & $agent check --server https://127.0.0.1:1
           if ($LASTEXITCODE -eq 0) { throw 'An unavailable endpoint passed the readiness check' }
           $env:DEPLOYCORE_TEST_PACKAGED_AGENT = $agent
+          $env:DEPLOYCORE_TEST_LEGACY_AGENT = Join-Path (Get-Location) 'deploycore-agent-0.3.8.exe'
           $env:DEPLOYCORE_TEST_MIGRATION_PREVIOUS = Join-Path (Get-Location) 'migration-previous.msi'
           $env:DEPLOYCORE_TEST_MIGRATION_CURRENT = Join-Path (Get-Location) 'migration-current.msi'
           $env:DEPLOYCORE_TEST_MIGRATION_SCRIPT = Join-Path (Get-Location) 'upgrade-agent.ps1'

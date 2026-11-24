@@ -54,6 +54,10 @@ func TestPackagedAgentService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	legacyExe, initialVersion := exe, version
+	if path := os.Getenv("DEPLOYCORE_TEST_LEGACY_AGENT"); path != "" {
+		legacyExe, initialVersion = path, "0.3.8"
+	}
 	var mu sync.Mutex
 	var id, credential string
 	enrolled, inventory, pulse := make(chan struct{}, 1), make(chan struct{}, 1), make(chan struct{}, 1)
@@ -74,7 +78,7 @@ func TestPackagedAgentService(t *testing.T) {
 			var input Enrollment
 			if r.Method != http.MethodPost || json.NewDecoder(r.Body).Decode(&input) != nil ||
 				input.EnrollmentToken != token || !deviceIDPattern.MatchString(input.InstallationID) ||
-				!validToken(input.Credential) || input.Heartbeat.Hostname == "" || input.Heartbeat.AgentVersion != version {
+				!validToken(input.Credential) || input.Heartbeat.Hostname == "" || input.Heartbeat.AgentVersion != initialVersion {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
@@ -130,7 +134,7 @@ func TestPackagedAgentService(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	install := exec.Command(exe, "install", "--server", server.URL, "--ca", file)
+	install := exec.Command(legacyExe, "install", "--server", server.URL, "--ca", file)
 	install.Stdin = strings.NewReader(token)
 	if output, err := install.CombinedOutput(); err != nil {
 		t.Fatalf("install failed: %v: %s", err, output)
@@ -179,7 +183,7 @@ func TestPackagedAgentService(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, key := range []string{"DEPLOYCORE_TEST_MIGRATION_PREVIOUS", "DEPLOYCORE_TEST_MIGRATION_CURRENT"} {
+		for index, key := range []string{"DEPLOYCORE_TEST_MIGRATION_PREVIOUS", "DEPLOYCORE_TEST_MIGRATION_CURRENT"} {
 			msi := os.Getenv(key)
 			binary, err := os.ReadFile(msi)
 			if err != nil {
@@ -196,6 +200,15 @@ func TestPackagedAgentService(t *testing.T) {
 				t.Fatalf("MSI transition failed: %v: %s", err, output)
 			}
 			wait("heartbeat after MSI upgrade", pulse)
+			expectedVersion := version
+			if index == 0 {
+				expectedVersion = initialVersion
+			}
+			managed := filepath.Join(filepath.Dir(directory), "DeployCore Managed Agent", exeName)
+			output, err := exec.Command(managed, "version").Output()
+			if err != nil || strings.TrimSpace(string(output)) != expectedVersion {
+				t.Fatalf("installed MSI version: got %q, want %q, error %v", output, expectedVersion, err)
+			}
 			after, err := loadState(directory)
 			if err != nil || !reflect.DeepEqual(before, after) {
 				t.Fatal("MSI changed the stored registration, certificate, or credential")
