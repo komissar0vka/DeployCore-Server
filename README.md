@@ -1,5 +1,10 @@
 # DeployCore
 
+## Установка клиентского Server
+
+[DeployCore Server 1.0 Beta](docs/releases/client-install.md) устанавливается из релизного архива на Ubuntu 22.04/24.04. Локальный тариф Free включает пять устройств. Подключение к Cloud требуется для онлайн-активации платной лицензии и просмотра каналов обновлений.
+
+
 DeployCore размещён в `apps/`, `packages/` и `deploy/`. Это отдельный Compose-проект. Версия 0.3.1 добавляет MSI и мастер настройки Windows Agent, автоматическую проверку HTTPS, сводку по компьютерам и расширенную инвентаризацию. Интерфейс по умолчанию русскоязычный. См. [архитектуру](docs/architecture/overview.md), [API](docs/api/overview.md), [дорожную карту](docs/roadmap.md) и [CHANGELOG](CHANGELOG.md).
 
 ### Разработка 0.4.0

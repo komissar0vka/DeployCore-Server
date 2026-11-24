@@ -1,5 +1,6 @@
 import json
 import os
+from subprocess import SubprocessError
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID
@@ -7,7 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
 
-from . import licensing
+from . import cloud_link, licensing
 from .device_models import Device
 from .device_schemas import Wire
 from .license_models import LicenseState
@@ -42,7 +43,11 @@ def managed_count(db: Db) -> int:
 def local_trust() -> tuple[bytes, dict[str, bytes]]:
     path = os.environ.get("DEPLOYCORE_LICENSE_TRUST")
     if not path:
-        raise licensing.LicenseValidationError("license_trust_unavailable")
+        try:
+            cloud = cloud_link.connection()
+            return cloud_link.instance_public_key(), {"cloud-license-1": cloud.license_key}
+        except (OSError, ValueError, TypeError, KeyError, SubprocessError) as exc:
+            raise licensing.LicenseValidationError("license_trust_unavailable") from exc
     try:
         with open(path, "rb") as source:
             raw = source.read(16385)
@@ -116,3 +121,15 @@ def import_license(data: SignedGrant, request: Request, db: Db, actor: SystemAdm
                          expires_at=verified.payload.expires_at)
     db.commit()
     return result
+
+
+@router.get("/updates/{channel}")
+def available_updates(channel: Literal["stable", "beta"], actor: Reader):
+    try:
+        cloud = cloud_link.connection()
+        manifest = cloud_link.signed_response(cloud.request(f"/v1/releases/{channel}"), "release", cloud.release_key)
+        if manifest["channel"] != channel or datetime.fromisoformat(manifest["expires_at"]) <= datetime.now(UTC):
+            raise ValueError("wrong_release_channel")
+        return {"current_version": cloud_link.VERSION, "releases": manifest["releases"]}
+    except (OSError, ValueError, TypeError, KeyError):
+        raise HTTPException(503, "cloud_updates_unavailable") from None

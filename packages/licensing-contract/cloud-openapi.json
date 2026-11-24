@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "DeployCore Cloud Activation",
-    "version": "1.0.0-draft",
-    "description": "Contract for the future activation service."
+    "version": "1.0.0-beta.1",
+    "description": "Proof-of-possession activation and recurring Cloud grant checks."
   },
   "paths": {
     "/v1/activation/challenge": {
@@ -135,6 +135,12 @@
             "pattern": "^[A-Za-z0-9_-]{86}$",
             "title": "Proof",
             "type": "string"
+          },
+          "server_version": {
+            "maxLength": 64,
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$",
+            "title": "Server Version",
+            "type": "string"
           }
         },
         "required": [
@@ -143,7 +149,8 @@
           "instance_public_key",
           "request_id",
           "challenge_id",
-          "proof"
+          "proof",
+          "server_version"
         ],
         "title": "ActivationRequest",
         "type": "object"

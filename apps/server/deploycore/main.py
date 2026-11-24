@@ -1,3 +1,5 @@
+import asyncio
+from contextlib import suppress
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -6,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from .cloud_link import VERSION, poll
 from .body_limit import AgentBodyLimit
 from .agent_package_api import router as agent_package_router
 from .device_api import router as device_router
@@ -23,15 +26,19 @@ from .system_api import router as system_router
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     database = create_database_engine()
     app.state.database = database
+    cloud_task = asyncio.create_task(poll(database))
     try:
         yield
     finally:
+        cloud_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await cloud_task
         database.dispose()
 
 
 app = FastAPI(
     title="DeployCore",
-    version="0.3.1",
+    version=VERSION,
     openapi_url="/api/openapi.json",
     docs_url=None,
     redoc_url=None,

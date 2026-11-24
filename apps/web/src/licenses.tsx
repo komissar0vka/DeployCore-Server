@@ -4,6 +4,11 @@ import { api, type Session } from './api'
 import { LoadingSkeleton, SectionTitle, StatusBadge } from './design'
 import { Action, FormError, Panel, errorMessage, type Translate } from './ui'
 
+interface Updates {
+  current_version: string
+  releases: { version: string; published_at: string }[]
+}
+
 interface License {
   instance_id: string
   edition: 'free' | 'business' | 'enterprise'
@@ -17,6 +22,8 @@ export function LicensesPage({ session, t }: { session: Session; t: Translate })
   const client = useQueryClient()
   const [file, setFile] = useState<File>()
   const [problem, setProblem] = useState('')
+  const [channel, setChannel] = useState<'stable' | 'beta'>('stable')
+  const updates = useMutation({ mutationFn: (choice: string) => api<Updates>(`/licenses/updates/${choice}`) })
   const query = useQuery({ queryKey: ['license'], queryFn: () => api<License>('/licenses'), refetchInterval: 15_000 })
   const upload = useMutation({
     mutationFn: (body: unknown) => api<License>('/licenses/import', { method: 'POST', body, csrf: session.csrf_token }),
@@ -50,6 +57,27 @@ export function LicensesPage({ session, t }: { session: Session; t: Translate })
         {data.expires_at && <div><dt>{t('Действует до', 'Expires')}</dt><dd>{new Date(data.expires_at).toLocaleString(t('ru', 'en'))}</dd></div>}
       </dl>}
       {data && data.managed > data.limit && <p className="mt-3 text-sm">{t('Достигнут лимит. Существующие устройства продолжают работу.', 'The limit is reached. Existing devices remain managed.')}</p>}
+    </Panel>
+    <Panel>
+      <SectionTitle title={t('Обновления Server', 'Server updates')} />
+      <label className="grid max-w-xs gap-2 text-sm">
+        {t('Канал релизов', 'Release channel')}
+        <select className="input" value={channel} onChange={event => {
+          setChannel(event.target.value as 'stable' | 'beta'); updates.reset()
+        }}>
+          <option value="stable">Stable</option><option value="beta">Beta</option>
+        </select>
+      </label>
+      <div className="mt-3">
+        <Action onClick={() => updates.mutate(channel)} disabled={updates.isPending}>{t('Проверить релизы', 'Check releases')}</Action>
+      </div>
+      <FormError message={updates.error && errorMessage(updates.error, t)} />
+      {updates.data && <div className="mt-3 text-sm">
+        <p>{t('Текущая версия', 'Current version')} {updates.data.current_version}</p>
+        {updates.data.releases.length ? <ul>{updates.data.releases.map(release =>
+          <li key={release.version}>{release.version} · {new Date(release.published_at).toLocaleDateString()}</li>)}</ul>
+          : <p>{t('В этом канале релизов пока нет.', 'This channel has no releases yet.')}</p>}
+      </div>}
     </Panel>
     {session.user.role === 'super_admin' && <Panel>
       <SectionTitle title={t('Импорт подписанной лицензии', 'Import signed license')} />

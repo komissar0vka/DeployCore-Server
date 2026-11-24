@@ -9,11 +9,11 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY apps/server/requirements.txt .
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates msitools osslsigncode wixl \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssl msitools osslsigncode wixl \
     && rm -rf /var/lib/apt/lists/* \
     && python -m pip install --no-cache-dir -r requirements.txt \
     && useradd --system --uid 10001 deploycore \
-    && install -d -m 0700 -o deploycore /var/lib/deploycore/packages
+    && install -d -m 0700 -o deploycore /var/lib/deploycore/packages /var/lib/deploycore/cloud
 COPY --from=agent /out/deploycore-agent.exe /opt/deploycore/agent/
 COPY apps/agent/VERSION apps/agent/configured-agent.wxs /opt/deploycore/agent/
 COPY apps/server/deploycore ./deploycore

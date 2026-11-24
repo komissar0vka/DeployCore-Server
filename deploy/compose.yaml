@@ -34,6 +34,7 @@ services:
       DEPLOYCORE_PACKAGE_CA_FILE: ${DEPLOYCORE_PACKAGE_CA_FILE:-}
     volumes:
       - package-data:/var/lib/deploycore/packages
+      - cloud-link:/var/lib/deploycore/cloud
     networks: [edge, data]
     depends_on:
       db:
@@ -77,3 +78,4 @@ networks:
 volumes:
   postgres-data:
   package-data:
+  cloud-link:

@@ -85,6 +85,7 @@ class ActivationRequest(ChallengeRequest):
     request_id: UUID
     challenge_id: UUID
     proof: Signature
+    server_version: Annotated[str, StringConstraints(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$", max_length=64)]
 
 
 def cloud_contract() -> dict:
@@ -116,8 +117,8 @@ def cloud_contract() -> dict:
         }}
     return {
         "openapi": "3.1.0",
-        "info": {"title": "DeployCore Cloud Activation", "version": "1.0.0-draft",
-                 "description": "Contract for the future activation service."},
+        "info": {"title": "DeployCore Cloud Activation", "version": "1.0.0-beta.1",
+                 "description": "Proof-of-possession activation and recurring Cloud grant checks."},
         "paths": paths,
         "components": {
             "schemas": definitions["$defs"],
