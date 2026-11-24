@@ -1,7 +1,13 @@
 """Exercise execution authorization and transitions. Never execute a Windows payload."""
 from concurrent.futures import ThreadPoolExecutor
+import base64
 import hashlib
+import json
+import os
 import secrets
+import subprocess
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import uuid
 from urllib.error import HTTPError
 from urllib.request import HTTPSHandler, ProxyHandler, Request, build_opener
@@ -70,6 +76,24 @@ def exercise_execution(check, login, sql, base, context, version_id, composite_i
         WHERE deployment_jobs.id = '{created["id"]}' AND package_artifacts.version_id = deployment_jobs.version_id;
     """)
     manifest = agent(0, target + "/manifest" + suffix, method="GET")
+    auth = target + "/authorization" + suffix
+    agent(1, auth, method="GET", expected=404)
+    if public_key := os.environ.get("DEPLOYCORE_SMOKE_JOB_PUBLIC"):
+        envelope = agent(0, auth, method="GET")
+        decode = lambda value: base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+        payload = decode(envelope["payload"])
+        assert envelope["version"] == 1 and envelope["key_id"] == "smoke-execution"
+        with TemporaryDirectory() as directory:
+            message = Path(directory) / "message"
+            signature = Path(directory) / "signature"
+            message.write_bytes(b"DeployCore-execution-v1\0smoke-execution\0" + payload)
+            signature.write_bytes(decode(envelope["signature"]))
+            subprocess.run(["openssl", "pkeyutl", "-verify", "-pubin", "-inkey", public_key, "-rawin",
+                            "-in", str(message), "-sigfile", str(signature)], check=True, capture_output=True)
+        signed = json.loads(payload)
+        assert signed["device_id"] == devices[0]
+        assert signed["attempt_id"] == attempt and signed["target_id"] == target
+        assert signed["manifest"] == manifest
     image, headers = fetch(0, target, attempt, 200)
     assert headers["X-DeployCore-SHA256"] == manifest["sha256"] == hashlib.sha256(image).hexdigest()
     partial, _ = fetch(0, target, attempt, 206, headers={"Range": "bytes=0-63"})
@@ -80,6 +104,7 @@ def exercise_execution(check, login, sql, base, context, version_id, composite_i
     agent(0, target + "/heartbeat", data={**proof, "stage": "downloading"})
     agent(0, target + "/start", data=proof)
     agent(0, target + "/start", data=proof, expected=409)
+    agent(0, auth, method="GET", expected=409)
     fetch(0, target, attempt, 409)
     assert agent(0, "poll")["recovery_required"]
     agent(0, target + "/heartbeat", data={**proof, "stage": "verifying"})

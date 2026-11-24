@@ -14,7 +14,14 @@ export POSTGRES_DB=deploycore
 export DEPLOYCORE_HTTPS_BIND=127.0.0.1
 export DEPLOYCORE_HTTPS_PORT="${SMOKE_PORT:-18443}"
 export DEPLOYCORE_TLS_DIR="$scratch"
-compose=(docker compose --env-file "$root/deploy/.env.example" -f "$root/deploy/compose.yaml" -p "deploycore-smoke-$$")
+export DEPLOYCORE_JOB_SIGNING_KEY_ID=smoke-execution
+export DEPLOYCORE_JOB_SIGNING_HOST_KEY="$scratch/job-private.pem"
+export DEPLOYCORE_SMOKE_JOB_PUBLIC="$scratch/job-public.pem"
+openssl genpkey -algorithm ED25519 -out "$DEPLOYCORE_JOB_SIGNING_HOST_KEY"
+openssl pkey -in "$DEPLOYCORE_JOB_SIGNING_HOST_KEY" -pubout -out "$DEPLOYCORE_SMOKE_JOB_PUBLIC"
+# The temporary parent directory is private; uid 10001 needs access through its read-only file mount.
+chmod 0444 "$DEPLOYCORE_JOB_SIGNING_HOST_KEY"
+compose=(docker compose --env-file "$root/deploy/.env.example" -f "$root/deploy/compose.yaml" -f "$root/deploy/compose.job-signing.yaml" -p "deploycore-smoke-$$")
 base="https://localhost:$DEPLOYCORE_HTTPS_PORT"
 
 cleanup() {
