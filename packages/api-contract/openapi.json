@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "DeployCore",
-    "version": "0.3.1"
+    "version": "1.0.0-beta.2"
   },
   "paths": {
     "/api/health/live": {
@@ -2574,6 +2574,55 @@
             "DeployCoreSession": []
           }
         ]
+      }
+    },
+    "/api/v1/licenses/updates/{channel}": {
+      "get": {
+        "tags": [
+          "Licensing"
+        ],
+        "summary": "Available Updates",
+        "operationId": "available_updates_api_v1_licenses_updates__channel__get",
+        "security": [
+          {
+            "DeployCoreSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "channel",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "stable",
+                "beta"
+              ],
+              "type": "string",
+              "title": "Channel"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/agent/{device_id}/jobs/{target_id}/manifest": {

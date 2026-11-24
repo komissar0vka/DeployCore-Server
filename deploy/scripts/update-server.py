@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import ssl
 import subprocess
 import sys
@@ -137,11 +138,16 @@ def backup(directory, restore_db):
             path = DEPLOY / filename
             if path.exists():
                 bundle.add(path, arcname=filename)
-    server = compose("ps", "-aq", "server", capture_output=True, text=True).stdout.strip()
-    for directory_name in ("packages", "cloud"):
-        with (directory / (directory_name + ".tar")).open("xb") as output:
-            subprocess.run(["docker", "cp", f"{server}:/var/lib/deploycore/{directory_name}/.", "-"],
-                           stdout=output, check=True)
+    paths = (("server", "packages", "/var/lib/deploycore/packages"),
+             ("server", "cloud", "/var/lib/deploycore/cloud"),
+             ("web", "tls", "/etc/deploycore/tls"))
+    for service, name, path in paths:
+        container = compose("ps", "-aq", service, capture_output=True, text=True).stdout.strip()
+        archive = directory / (name + ".tar")
+        with archive.open("xb") as output:
+            subprocess.run(["docker", "cp", f"{container}:{path}/.", "-"], stdout=output, check=True)
+        with tarfile.open(archive) as bundle:
+            bundle.getmembers()
 
 
 def install(channel, version):
@@ -169,15 +175,21 @@ def install(channel, version):
     compose("build", "server", "web", override=candidate)
     database = compose("exec", "-T", "db", "printenv", "POSTGRES_DB", capture_output=True, text=True).stdout.strip()
     restore_db, failed_db = "restore_" + suffix, "failed_" + suffix
-    compose("stop", "web", "server")
     backup_complete = False
     attempt_started = False
     try:
+        compose("stop", "web", "server")
         backup(work, restore_db)
         backup_complete = True
         attempt_started = True
-        compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "180", "server", "web", override=candidate)
-    except (OSError, subprocess.SubprocessError, KeyboardInterrupt):
+        compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "180", "server", override=candidate)
+        running_version = compose("exec", "-T", "server", "python", "-c",
+                                  "from deploycore.cloud_link import VERSION; print(VERSION)",
+                                  capture_output=True, text=True).stdout.strip()
+        if running_version != version:
+            raise ValueError("Running version differs from signed manifest")
+        compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "90", "web", override=candidate)
+    except (OSError, ValueError, subprocess.SubprocessError, KeyboardInterrupt):
         if backup_complete and attempt_started:
             compose("stop", "web", "server", override=candidate)
             sql('BEGIN;\nALTER DATABASE :"current" RENAME TO :"failed";\nALTER DATABASE :"restore" RENAME TO :"current";\nCOMMIT;\n',
@@ -192,7 +204,12 @@ def install(channel, version):
     print(f"Installed {version}. Backup retained at {work}")
 
 
+def terminate(_signal, _frame):
+    raise KeyboardInterrupt
+
+
 def main():
+    signal.signal(signal.SIGTERM, terminate)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("channel", choices=["stable", "beta"])
     parser.add_argument("version")

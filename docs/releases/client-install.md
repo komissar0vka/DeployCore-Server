@@ -5,11 +5,12 @@
 Поддерживаемая архитектура — x86_64. Используйте отдельный клиентский Linux-хост с доступом к Ubuntu, Docker Hub и GitHub. Для установки нужны права sudo.
 
 ```bash
-version=1.0.0-beta.1
+version=1.0.0-beta.2
 base="https://github.com/komissar0vka/DeployCore-Releases/releases/download/v${version}"
 mkdir deploycore-server && cd deploycore-server
 curl -fLO "$base/deploycore-server-${version}.tar.gz"
 curl -fLO "$base/SHA256SUMS"
+curl -fLO "$base/deploycore-cloud-ca.pem"
 sha256sum -c SHA256SUMS
 tar -xzf "deploycore-server-${version}.tar.gz"
 sudo bash install.sh

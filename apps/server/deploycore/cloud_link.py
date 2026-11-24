@@ -24,7 +24,7 @@ from .license_models import LicenseState
 DIRECTORY = Path("/var/lib/deploycore/cloud")
 CONFIG = DIRECTORY / "connection.json"
 PRIVATE_KEY = DIRECTORY / "instance.pem"
-VERSION = "1.0.0-beta.1"
+VERSION = "1.0.0-beta.2"
 LOG = logging.getLogger(__name__)
 
 
