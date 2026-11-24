@@ -93,14 +93,56 @@ try {
         }
         $currentVersion = [version](& $currentExecutable version)
         if ($LASTEXITCODE) { throw 'Could not determine the installed agent version.' }
-        $installer = New-Object -ComObject WindowsInstaller.Installer
-        $db = $installer.GetType().InvokeMember('OpenDatabase','InvokeMethod',$null,$installer,@($msiFile,0))
-        $query = "SELECT Value FROM Property WHERE Property='ProductVersion'"
-        $view = $db.GetType().InvokeMember('OpenView','InvokeMethod',$null,$db,@($query))
-        $view.GetType().InvokeMember('Execute','InvokeMethod',$null,$view,$null) | Out-Null
-        $record = $view.GetType().InvokeMember('Fetch','InvokeMethod',$null,$view,$null)
-        $candidateVersion = [version]($record.GetType().InvokeMember('StringData','GetProperty',$null,$record,@(1)))
-        $view.GetType().InvokeMember('Close','InvokeMethod',$null,$view,$null) | Out-Null
+        Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class DeployCoreMsiMetadata
+{
+    [DllImport("msi.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
+    private static extern uint MsiOpenDatabaseW(string path, IntPtr mode, out uint database);
+    [DllImport("msi.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
+    private static extern uint MsiDatabaseOpenViewW(uint database, string query, out uint view);
+    [DllImport("msi.dll", ExactSpelling = true)]
+    private static extern uint MsiViewExecute(uint view, uint record);
+    [DllImport("msi.dll", ExactSpelling = true)]
+    private static extern uint MsiViewFetch(uint view, out uint record);
+    [DllImport("msi.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
+    private static extern uint MsiRecordGetStringW(uint record, uint field, StringBuilder result, ref uint size);
+    [DllImport("msi.dll", ExactSpelling = true)]
+    private static extern uint MsiCloseHandle(uint handle);
+
+    private static void Check(uint status)
+    {
+        if (status != 0) throw new Win32Exception((int)status);
+    }
+
+    public static Version ReadVersion(string path)
+    {
+        uint database = 0, view = 0, record = 0;
+        try
+        {
+            Check(MsiOpenDatabaseW(path, IntPtr.Zero, out database));
+            Check(MsiDatabaseOpenViewW(database, "SELECT `Value` FROM `Property` WHERE `Property`='ProductVersion'", out view));
+            Check(MsiViewExecute(view, 0));
+            Check(MsiViewFetch(view, out record));
+            var version = new StringBuilder(64);
+            uint length = (uint)version.Capacity;
+            Check(MsiRecordGetStringW(record, 1, version, ref length));
+            return Version.Parse(version.ToString());
+        }
+        finally
+        {
+            if (record != 0) MsiCloseHandle(record);
+            if (view != 0) MsiCloseHandle(view);
+            if (database != 0) MsiCloseHandle(database);
+        }
+    }
+}
+'@
+        $candidateVersion = [DeployCoreMsiMetadata]::ReadVersion($msiFile)
         if ($candidateVersion -le $currentVersion) { throw 'Agent update must be newer than the installed version.' }
 
     }
