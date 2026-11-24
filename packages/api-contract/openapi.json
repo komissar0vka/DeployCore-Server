@@ -3585,6 +3585,74 @@
         }
       }
     },
+    "/api/v1/agent/{device_id}/jobs/{target_id}/authorization": {
+      "get": {
+        "tags": [
+          "Agent Execution"
+        ],
+        "summary": "Authorize Execution",
+        "operationId": "authorize_execution_api_v1_agent__device_id__jobs__target_id__authorization_get",
+        "security": [
+          {
+            "DeployCoreAgent": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "target_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Target Id"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "attempt_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Attempt Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedExecution"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agent/{device_id}/jobs/{target_id}/artifact": {
       "get": {
         "tags": [
@@ -7089,6 +7157,35 @@
           "language"
         ],
         "title": "SetupStatus"
+      },
+      "SignedExecution": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Version",
+            "default": 1
+          },
+          "key_id": {
+            "type": "string",
+            "title": "Key Id"
+          },
+          "payload": {
+            "type": "string",
+            "title": "Payload"
+          },
+          "signature": {
+            "type": "string",
+            "title": "Signature"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key_id",
+          "payload",
+          "signature"
+        ],
+        "title": "SignedExecution"
       },
       "SignedGrant": {
         "properties": {

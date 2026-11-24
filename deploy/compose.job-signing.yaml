@@ -1,0 +1,12 @@
+services:
+  server:
+    environment:
+      DEPLOYCORE_JOB_SIGNING_KEY_ID: ${DEPLOYCORE_JOB_SIGNING_KEY_ID:?}
+      DEPLOYCORE_JOB_SIGNING_KEY_FILE: /run/deploycore-job-key/private.pem
+    volumes:
+      - type: bind
+        source: ${DEPLOYCORE_JOB_SIGNING_HOST_KEY:?}
+        target: /run/deploycore-job-key/private.pem
+        read_only: true
+        bind:
+          create_host_path: false

@@ -67,7 +67,15 @@ func (handler serviceHandler) Execute(_ []string, changes <-chan svc.ChangeReque
 				logger.Printf("Load deployment journal: %v", err)
 				return
 			}
+			trust, replay, err := loadJobTrust(directory)
+			if err != nil {
+				logger.Printf("Load deployment trust: %v", err)
+				return
+			}
 			transport := JobTransport{client: client, state: state, journal: journal, log: logger,
+				trust: trust, replay: replay, saveReplay: func(value jobReplay) error {
+					return saveProtectedJSON(filepath.Join(directory, "job-replay.dpapi"), value)
+				},
 				save: func(value JobJournal) error { return saveProtectedJSON(path, value) }, execute: windowsExecutor(directory), detect: detectWindows, bootID: windowsBootID}
 			transport.run(ctx)
 		},

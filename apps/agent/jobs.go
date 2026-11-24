@@ -48,14 +48,17 @@ type JobJournal struct {
 }
 
 type JobTransport struct {
-	client  *Client
-	state   State
-	journal JobJournal
-	save    func(JobJournal) error
-	log     *log.Logger
-	execute Executor
-	detect  Detector
-	bootID  func() string
+	client     *Client
+	state      State
+	journal    JobJournal
+	save       func(JobJournal) error
+	log        *log.Logger
+	execute    Executor
+	detect     Detector
+	bootID     func() string
+	trust      *JobTrust
+	replay     jobReplay
+	saveReplay func(jobReplay) error
 }
 
 func (t *JobTransport) capabilities() string {
@@ -108,7 +111,10 @@ func (t *JobTransport) step(ctx context.Context) error {
 			return err
 		}
 		if poll.Assignment == nil {
-			return t.preview(ctx)
+			if t.trust == nil {
+				return t.preview(ctx)
+			}
+			return nil
 		}
 		if !poll.Assignment.valid() {
 			return fmt.Errorf("unsupported deployment assignment")
@@ -218,18 +224,23 @@ func (t *JobTransport) executeJob(parent context.Context, path string) error {
 		return err
 	}
 	suffix := "?attempt_id=" + attempt
-	var manifest Manifest
-	if err := t.request(ctx, http.MethodGet, path+"manifest"+suffix, nil, &manifest); err != nil {
+	manifest, expires, err := t.executionManifest(ctx, path, suffix, job)
+	if err != nil {
 		var status StatusError
-		if errors.As(err, &status) && status == http.StatusConflict {
-			return t.recordExecution(ExecutionResult{Outcome: "failed", Diagnostic: "manifest_invalid"})
+		if errors.As(err, &status) && status != http.StatusConflict && (status != http.StatusNotFound || t.trust == nil) {
+			return err
 		}
-		return err
+		t.log.Printf("Deployment manifest rejected: %v", err)
+		return t.recordExecution(ExecutionResult{Outcome: "failed", Diagnostic: "manifest_invalid"})
 	}
 	if !manifest.valid() {
 		return t.recordExecution(ExecutionResult{Outcome: "failed", Diagnostic: "manifest_invalid"})
 	}
 
+	if t.trust != nil && t.replay[job.TargetID].After(time.Now()) {
+		return t.recordExecution(ExecutionResult{Outcome: "failed", Diagnostic: "manifest_invalid"})
+	}
+	var authorizationRejected bool
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
@@ -257,6 +268,13 @@ func (t *JobTransport) executeJob(parent context.Context, path string) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+			if t.trust != nil {
+				if err := t.consumeAuthorization(job.TargetID, expires); err != nil {
+					authorizationRejected = true
+					t.log.Printf("Deployment authorization rejected before start: %v", err)
+					return err
+				}
+			}
 			next := t.journal
 			next.Started = true
 			if err := t.persist(next); err != nil {
@@ -274,6 +292,9 @@ func (t *JobTransport) executeJob(parent context.Context, path string) error {
 		if t.journal.Started {
 			return t.recordExecution(ExecutionResult{Outcome: "unknown", Diagnostic: "interrupted"})
 		}
+		if authorizationRejected {
+			return t.recordExecution(ExecutionResult{Outcome: "failed", Diagnostic: "manifest_invalid"})
+		}
 		if cancellation.Load() {
 			return t.recordExecution(ExecutionResult{Outcome: "cancelled"})
 		}
@@ -285,6 +306,34 @@ func (t *JobTransport) executeJob(parent context.Context, path string) error {
 		return t.persist(next.withResult(result))
 	}
 	return t.recordExecution(result)
+}
+
+func (t *JobTransport) executionManifest(ctx context.Context, path, suffix string, job Assignment) (Manifest, time.Time, error) {
+	if t.trust == nil {
+		var manifest Manifest
+		err := t.request(ctx, http.MethodGet, path+"manifest"+suffix, nil, &manifest)
+		return manifest, time.Time{}, err
+	}
+	var envelope signedExecution
+	if err := t.request(ctx, http.MethodGet, path+"authorization"+suffix, nil, &envelope); err != nil {
+		return Manifest{}, time.Time{}, err
+	}
+	return t.trust.verify(envelope, t.state.DeviceID, job, time.Now())
+}
+
+func (t *JobTransport) consumeAuthorization(target string, expires time.Time) error {
+	if t.saveReplay == nil {
+		return errors.New("signed execution replay store unavailable")
+	}
+	next, err := t.replay.consume(target, expires, time.Now())
+	if err != nil {
+		return err
+	}
+	if err := t.saveReplay(next); err != nil {
+		return err
+	}
+	t.replay = next
+	return nil
 }
 
 func (t *JobTransport) recordExecution(result ExecutionResult) error {

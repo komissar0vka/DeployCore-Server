@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"unsafe"
@@ -151,4 +153,46 @@ func loadState(directory string) (State, error) {
 		return State{}, fmt.Errorf("invalid agent state")
 	}
 	return state, nil
+}
+
+func loadJobTrust(directory string) (*JobTrust, jobReplay, error) {
+	policyPath := filepath.Join(directory, "job-trust.json")
+	replayPath := filepath.Join(directory, "job-replay.dpapi")
+	var replay jobReplay
+	replayErr := loadProtectedJSON(replayPath, &replay)
+	if replayErr != nil && !errors.Is(replayErr, os.ErrNotExist) {
+		return nil, nil, replayErr
+	}
+	if err := rejectReparse(policyPath, false); err != nil {
+		if errors.Is(err, os.ErrNotExist) && errors.Is(replayErr, os.ErrNotExist) {
+			return nil, nil, nil
+		}
+		return nil, nil, err
+	}
+	file, err := os.Open(policyPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, 256*1024+1))
+	if err != nil {
+		return nil, nil, err
+	}
+	var trust JobTrust
+	if len(raw) > 256*1024 || json.Unmarshal(raw, &trust) != nil {
+		return nil, nil, fmt.Errorf("invalid job trust policy")
+	}
+	if err := trust.validate(); err != nil {
+		return nil, nil, err
+	}
+	if errors.Is(replayErr, os.ErrNotExist) {
+		replay = make(jobReplay)
+		if err := saveProtectedJSON(replayPath, replay); err != nil {
+			return nil, nil, err
+		}
+	}
+	if replay == nil || len(replay) > maxReplayEntries {
+		return nil, nil, fmt.Errorf("invalid replay store")
+	}
+	return &trust, replay, nil
 }

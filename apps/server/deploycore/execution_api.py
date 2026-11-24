@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
+from .job_signing import ExecutionBinding, SignedExecution, authorize
 from . import job_schemas as wire
 from . import package_schemas as catalog
 from .device_api import AgentDevice
@@ -55,14 +56,28 @@ def permitted(db, device, target_id, attempt_id, request):
     return target, attempt, job, version, artifact, rule, now
 
 
+def build_manifest(job, version, artifact, rule) -> Manifest:
+    return Manifest(installer=version.installer, architecture=version.architecture, size_bytes=artifact.size_bytes,
+                    sha256=artifact.sha256, args=version.uninstall_args if job.operation == "uninstall" else version.install_args,
+                    detection={"kind": rule.kind, **rule.data}, timeout_seconds=version.timeout_seconds,
+                    success_codes=version.success_codes, min_windows_build=version.min_windows_build,
+                    reboot_required=version.reboot_required, package_id=version.package_id if version.installer == "portable" else None)
+
+
 @router.get("/agent/{device_id}/jobs/{target_id}/manifest", tags=["Agent Execution"])
 def manifest(target_id: UUID, attempt_id: UUID, request: Request, db: Db, device: AgentDevice) -> Manifest:
     _, _, job, version, artifact, rule, _ = permitted(db, device, target_id, attempt_id, request)
-    result = Manifest(installer=version.installer, architecture=version.architecture, size_bytes=artifact.size_bytes,
-                      sha256=artifact.sha256, args=version.uninstall_args if job.operation == "uninstall" else version.install_args,
-                      detection={"kind": rule.kind, **rule.data}, timeout_seconds=version.timeout_seconds,
-                      success_codes=version.success_codes, min_windows_build=version.min_windows_build,
-                      reboot_required=version.reboot_required, package_id=version.package_id if version.installer == "portable" else None)
+    result = build_manifest(job, version, artifact, rule)
+    db.commit()
+    return result
+
+
+@router.get("/agent/{device_id}/jobs/{target_id}/authorization", tags=["Agent Execution"])
+def authorize_execution(target_id: UUID, attempt_id: UUID, request: Request, db: Db, device: AgentDevice) -> SignedExecution:
+    target, attempt, job, version, artifact, rule, now = permitted(db, device, target_id, attempt_id, request)
+    binding = ExecutionBinding(device_id=device.id, target_id=target.id, attempt_id=attempt.id,
+                               version_id=version.id, operation=job.operation)
+    result = authorize(binding, build_manifest(job, version, artifact, rule), now)
     db.commit()
     return result
 
