@@ -18,6 +18,8 @@ from urllib.parse import urlsplit
 from urllib.request import urlopen
 from uuid import uuid4
 
+from release_images import read_images
+
 ROOT = Path(__file__).resolve().parents[2]
 DEPLOY = ROOT / "deploy"
 STATE = DEPLOY / ".updater"
@@ -174,16 +176,19 @@ def install(channel, version):
     download(release, archive)
     extract(archive, source)
     old_images = {}
-    new_images = {}
+    image_manifest = source / "deploy/release-images.json"
+    prebuilt = image_manifest.is_file()
+    new_images = read_images(image_manifest) if prebuilt else {}
     for service in ("server", "web"):
         container = compose("ps", "-q", service, capture_output=True, text=True).stdout.strip()
         old_image = subprocess.check_output(["docker", "inspect", "--format", "{{.Image}}", container], text=True).strip()
         old_images[service] = f"deploycore-local-{service}:previous-{suffix}"
-        new_images[service] = f"deploycore-local-{service}:{version}-{suffix}"
+        if not prebuilt:
+            new_images[service] = f"deploycore-local-{service}:{version}-{suffix}"
         subprocess.run(["docker", "tag", old_image, old_images[service]], check=True)
     previous = override(work / "previous.json", old_images)
-    candidate = override(work / "candidate.json", new_images, source)
-    compose("build", "server", "web", override=candidate)
+    candidate = override(work / "candidate.json", new_images, None if prebuilt else source)
+    compose("pull" if prebuilt else "build", "server", "web", override=candidate)
     database = compose("exec", "-T", "db", "printenv", "POSTGRES_DB", capture_output=True, text=True).stdout.strip()
     restore_db, failed_db = "restore_" + suffix, "failed_" + suffix
     backup_complete = False

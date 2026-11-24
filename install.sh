@@ -69,6 +69,11 @@ fi
 compose=(docker compose --env-file deploy/.env -f deploy/compose.yaml)
 if [[ -r deploy/.updater/active.json ]]; then
   "${compose[@]}" -f deploy/.updater/active.json up -d --no-build --wait --wait-timeout 180
+elif [[ -f deploy/release-images.json ]]; then
+  install -d -m 700 deploy/.updater
+  python3 deploy/scripts/release_images.py deploy/release-images.json > deploy/.updater/release-images.tmp
+  mv -f deploy/.updater/release-images.tmp deploy/.updater/active.json
+  "${compose[@]}" -f deploy/.updater/active.json up -d --pull always --no-build --wait --wait-timeout 180
 else
   "${compose[@]}" up -d --build --wait --wait-timeout 180
 fi
