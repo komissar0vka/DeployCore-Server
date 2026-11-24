@@ -10,7 +10,7 @@ permissions:
   contents: read
 jobs:
   agent:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
@@ -125,6 +125,18 @@ jobs:
           $env:DEPLOYCORE_TEST_MIGRATION_PREVIOUS = Join-Path (Get-Location) 'migration-previous.msi'
           $env:DEPLOYCORE_TEST_MIGRATION_CURRENT = Join-Path (Get-Location) 'migration-current.msi'
           $env:DEPLOYCORE_TEST_MIGRATION_SCRIPT = Join-Path (Get-Location) 'upgrade-agent.ps1'
+          $signed = Join-Path (Get-Location) 'migration-signed.msi'
+          Copy-Item -LiteralPath $env:DEPLOYCORE_TEST_MIGRATION_CURRENT -Destination $signed
+          $certificate = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=DeployCore Hosted Test' -CertStoreLocation Cert:\CurrentUser\My
+          foreach ($storeName in @('Root','TrustedPublisher')) {
+            $store = [Security.Cryptography.X509Certificates.X509Store]::new($storeName,'CurrentUser')
+            $store.Open('ReadWrite')
+            try { $store.Add($certificate) } finally { $store.Close() }
+          }
+          $signature = Set-AuthenticodeSignature -LiteralPath $signed -Certificate $certificate -HashAlgorithm SHA256
+          if ($signature.Status -ne 'Valid') { throw "Hosted MSI signing failed: $($signature.Status)" }
+          $env:DEPLOYCORE_TEST_MIGRATION_SIGNED = $signed
+          $env:DEPLOYCORE_TEST_PUBLISHER_SHA256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($certificate.RawData))
           Push-Location ../apps/agent
           try {
             go test -run '^TestPackagedAgentService$' -count=1 -timeout 4m

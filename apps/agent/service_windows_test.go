@@ -208,6 +208,18 @@ func TestPackagedAgentService(t *testing.T) {
 		}
 		for index, key := range []string{"DEPLOYCORE_TEST_MIGRATION_PREVIOUS", "DEPLOYCORE_TEST_MIGRATION_CURRENT"} {
 			msi := os.Getenv(key)
+			signed := os.Getenv("DEPLOYCORE_TEST_MIGRATION_SIGNED")
+			if index == 1 && signed != "" {
+				msi = signed
+				publisher := os.Getenv("DEPLOYCORE_TEST_PUBLISHER_SHA256")
+				if len(publisher) != 64 {
+					t.Fatal("invalid hosted publisher fingerprint")
+				}
+				policyData := []byte(`{"certificate_sha256":["` + publisher + `"]}`)
+				if err := os.WriteFile(policy, policyData, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			binary, err := os.ReadFile(msi)
 			if err != nil {
 				t.Fatal(err)
