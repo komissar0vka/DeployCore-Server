@@ -122,9 +122,14 @@ jobs:
             $store.Open('ReadWrite')
             try { $store.Add($certificate) } finally { $store.Close() }
           }
-          $signature = Set-AuthenticodeSignature -LiteralPath $signed -Certificate $certificate -HashAlgorithm SHA256
-          if ($signature.Status -ne 'Valid') { throw "Hosted MSI signing failed: $($signature.Status)" }
+          $downgrade = Join-Path (Get-Location) 'migration-downgrade-signed.msi'
+          Copy-Item -LiteralPath 'migration-previous.msi' -Destination $downgrade
+          foreach ($file in @($signed,$downgrade)) {
+            $signature = Set-AuthenticodeSignature -LiteralPath $file -Certificate $certificate -HashAlgorithm SHA256
+            if ($signature.Status -ne 'Valid') { throw "Hosted MSI signing failed: $($signature.Status)" }
+          }
           "DEPLOYCORE_TEST_MIGRATION_SIGNED=$signed" >> $env:GITHUB_ENV
+          "DEPLOYCORE_TEST_MIGRATION_DOWNGRADE=$downgrade" >> $env:GITHUB_ENV
           $pin = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($certificate.RawData))
           "DEPLOYCORE_TEST_PUBLISHER_SHA256=$pin" >> $env:GITHUB_ENV
       - name: Exercise MSI lifecycle on Windows

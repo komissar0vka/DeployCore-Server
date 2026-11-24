@@ -254,6 +254,22 @@ func TestPackagedAgentService(t *testing.T) {
 			default:
 			}
 		}
+		if older := os.Getenv("DEPLOYCORE_TEST_MIGRATION_DOWNGRADE"); older != "" {
+			data, err := os.ReadFile(older)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reject := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-File", migration,
+				"-Msi", older, "-Sha256", fmt.Sprintf("%x", sha256.Sum256(data)))
+			if output, err := reject.CombinedOutput(); err == nil || !strings.Contains(string(output), "must be newer") {
+				t.Fatalf("trusted but older MSI was not rejected: %v: %s", err, output)
+			}
+			after, err := loadState(directory)
+			if err != nil || !reflect.DeepEqual(before, after) {
+				t.Fatal("rejected downgrade changed protected state")
+			}
+		}
+
 	}
 
 }
