@@ -1,4 +1,4 @@
-FROM golang:1.25-bookworm AS agent
+FROM golang:1.27.4-bookworm AS agent
 RUN apt-get update && apt-get install -y --no-install-recommends wixl \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
