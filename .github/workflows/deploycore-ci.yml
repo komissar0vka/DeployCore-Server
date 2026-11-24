@@ -116,6 +116,22 @@ jobs:
         run: |
           docker build -f apps/server/Dockerfile -t deploycore-security-server:ci .
           docker build -f deploy/Dockerfile.web -t deploycore-security-web:ci .
+      - name: Reconstruct the prior Debian runtime for comparison
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/prior-backend" 43d68b3
+          docker build -f "$RUNNER_TEMP/prior-backend/apps/server/Dockerfile" \
+            -t deploycore-security-baseline:ci "$RUNNER_TEMP/prior-backend"
+          docker run --rm --network none --entrypoint dpkg-query deploycore-security-baseline:ci \
+            -W '-f=${Package}	${Version}	${Depends}	${Pre-Depends}\n' > baseline-debian-packages.tsv
+      - name: Report historical Debian findings and preserve scan metadata
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: deploycore-security-baseline:ci
+          severity: HIGH,CRITICAL
+          scanners: vuln
+          format: json
+          output: baseline-trivy.json
+          exit-code: '0'
       - name: Scan backend image
         id: backend
         continue-on-error: true
@@ -123,6 +139,8 @@ jobs:
         with:
           image-ref: deploycore-security-server:ci
           severity: HIGH,CRITICAL
+          format: json
+          output: backend-trivy.json
           exit-code: '1'
       - name: Scan web image
         id: web
@@ -147,7 +165,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: server-image-sbom
-          path: '*.cdx.json'
+          path: |
+            *.cdx.json
+            *-trivy.json
+            baseline-debian-packages.tsv
       - name: Require every security check to pass
         env:
           OUTCOMES: ${{ steps.python.outcome }} ${{ steps.npm.outcome }} ${{ steps.go.outcome }} ${{ steps.secrets.outcome }} ${{ steps.backend.outcome }} ${{ steps.web.outcome }}
