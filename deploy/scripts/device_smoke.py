@@ -75,6 +75,18 @@ def exercise_devices(check, login, sql, compose, admin_cookie, admin_csrf, passw
         ))
     assert sorted(statuses) == [200, 403]
     assert len(check("/devices", {200}, **viewer)[1]["items"]) == 3
+    group_fields = {"name": "Test site", "device_ids": [device_id, other_id]}
+    check("/device-groups", {403}, method="POST", data=group_fields, **viewer)
+    group = check("/device-groups", {201}, method="POST", data=group_fields, **operator)[1]
+    group_path = "/device-groups/" + group["id"]
+    assert {member["id"] for member in check("/device-groups", {200}, **viewer)[1][0]["devices"]} == {device_id, other_id}
+    check("/device-groups", {409}, method="POST", data=group_fields, **operator)
+    renamed = check(group_path, {200}, method="PUT", **operator, data={
+        "name": "Test site renamed", "device_ids": [device_id],
+    })[1]
+    assert [member["id"] for member in renamed["devices"]] == [device_id]
+    check(group_path, {204}, method="DELETE", **operator)
+    assert check("/device-groups", {200}, **viewer)[1] == []
     check("/devices?sort=unsupported", {422}, **viewer)
     check("/devices?direction=invalid", {422}, **viewer)
     asc = check("/devices?sort=hostname&direction=asc&limit=1", {200}, **viewer)[1]

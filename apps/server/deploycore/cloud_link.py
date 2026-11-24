@@ -85,7 +85,10 @@ def connection(data=None):
     license_key, release_key = (licensing.decode_base64url(data[key]) for key in ("license_key", "release_key"))
     if len(license_key) != 32 or len(release_key) != 32:
         raise ValueError("invalid_cloud_key")
-    return Connection(data["origin"], data["token"], license_key, release_key, data.get("ca"))
+    ca = data.get("ca")
+    if ca and "PRIVATE KEY" in ca:
+        raise ValueError("invalid_cloud_ca")
+    return Connection(data["origin"], data["token"], license_key, release_key, ca)
 
 
 def signed_response(envelope, purpose, key):
@@ -99,8 +102,9 @@ def signed_response(envelope, purpose, key):
     return json.loads(payload, object_pairs_hook=licensing.strict_object)
 
 
-def refresh(engine):
-    cloud = connection()
+def refresh(engine, cloud: Connection | None = None):
+    apply_revocation = cloud is None
+    cloud = cloud or connection()
     public = instance_public_key()
     with Session(engine) as db:
         instance_id = db.get_one(LicenseState, 1).instance_id
@@ -122,11 +126,11 @@ def refresh(engine):
         if result.get("status") in {"revoked", "expired"}:
             if result.get("instance_id") != str(instance_id) or result.get("challenge_id") != challenge["challenge_id"]:
                 raise ValueError("invalid_cloud_status")
-            if result["status"] == "revoked" and result["issue_number"] > (state.issue_number or 0):
+            if apply_revocation and result["status"] == "revoked" and result["issue_number"] > (state.issue_number or 0):
                 state.grant = None
                 state.issue_number = result["issue_number"]
                 state.payload_sha256 = "0" * 64
-            return
+            return result["status"]
         raw = json.dumps(envelope).encode()
         previous = (licensing.GrantWatermark(state.issue_number, state.payload_sha256)
                     if state.issue_number is not None else None)
@@ -136,24 +140,26 @@ def refresh(engine):
         state.grant = raw
         state.issue_number = grant.watermark.issue_number
         state.payload_sha256 = grant.watermark.payload_sha256
+        return grant.status
 
 
-async def poll(engine):
+async def poll(engine, on_failure=None):
     while True:
         if CONFIG.is_file():
             try:
                 await asyncio.to_thread(refresh, engine)
             except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, SQLAlchemyError) as exc:
                 LOG.warning("Cloud license refresh failed (%s); using local license policy", type(exc).__name__)
+                if on_failure is not None:
+                    on_failure()
         await asyncio.sleep(300)
 
 
-def configure():
-    data = json.load(sys.stdin)
+def configure(data, engine=None):
     cloud = connection(data)
     keys = cloud.request("/v1/keys")
     if keys != {"cloud-license-1": encoded(cloud.license_key), "cloud-release-1": encoded(cloud.release_key)}:
-        raise SystemExit("Cloud keys do not match the pinned keys")
+        raise ValueError("cloud_keys_mismatch")
     if not PRIVATE_KEY.exists():
         with NamedTemporaryFile(dir=DIRECTORY, delete=False) as temporary:
             generated = Path(temporary.name)
@@ -164,10 +170,16 @@ def configure():
                 pass
             finally:
                 generated.unlink(missing_ok=True)
+    if engine is not None and refresh(engine, cloud) != "valid":
+        raise ValueError("cloud_license_unavailable")
     with NamedTemporaryFile(mode="w", dir=DIRECTORY, delete=False) as temporary:
         json.dump(data, temporary)
-    Path(temporary.name).replace(CONFIG)
+    temporary_path = Path(temporary.name)
+    try:
+        temporary_path.replace(CONFIG)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
-    configure()
+    configure(json.load(sys.stdin))

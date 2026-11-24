@@ -51,10 +51,17 @@ test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT
     -c "UPDATE installation_settings SET instance_name='Pre-catalog instance' WHERE id=1"
 "${compose[@]}" run --rm --no-deps server python -m alembic upgrade 0006_manual_approval
 test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT version_num FROM alembic_version")" = '0006_manual_approval'
+"${compose[@]}" run --rm --no-deps server python -m alembic upgrade 0008_local_licensing
+previous_instance=$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT instance_id FROM license_state WHERE id=1")
+"${compose[@]}" exec -T db psql -U deploycore -d deploycore -v ON_ERROR_STOP=1 \
+    -c "INSERT INTO software_packages(id,name,publisher,description,archived_at) VALUES
+        ('f21540f5-7669-4cf2-83c9-dba111ac090f','Beta 3 fixture','DeployCore','Preserved catalog metadata', now())"
 "${compose[@]}" up -d --no-build --wait --wait-timeout 120
 test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT instance_name FROM installation_settings WHERE id=1")" = 'Pre-catalog instance'
-test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT version_num FROM alembic_version")" = '0008_local_licensing'
-echo 'Upgrade from 0002 through 0006 to 0008 preserved existing settings'
+test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT version_num FROM alembic_version")" = '0012_deployment_batches'
+test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT instance_id FROM license_state WHERE id=1")" = "$previous_instance"
+test "$("${compose[@]}" exec -T db psql -U deploycore -d deploycore -Atc "SELECT description FROM software_packages WHERE name='Beta 3 fixture' AND category=''")" = 'Preserved catalog metadata'
+echo 'Upgrade through beta.3 to 0012 preserved settings, catalog data and license identity'
 
 request --fail "$base/" > "$scratch/index.html"
 grep -q '<title>DeployCore' "$scratch/index.html"

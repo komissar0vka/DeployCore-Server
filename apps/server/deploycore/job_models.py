@@ -23,6 +23,7 @@ class DeploymentJob(Base):
     created_by: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
     request_id: Mapped[UUID]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class DeploymentTarget(Base):
@@ -82,3 +83,11 @@ class DeploymentEvent(Base):
     attempt_id: Mapped[UUID | None] = mapped_column(ForeignKey("deployment_attempts.id"))
     action: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DeploymentBatch(Base):
+    __tablename__ = "deployment_batches"
+
+    created_by: Mapped[UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    request_id: Mapped[UUID] = mapped_column(primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64))

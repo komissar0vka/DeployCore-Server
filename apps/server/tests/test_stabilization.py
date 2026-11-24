@@ -43,11 +43,11 @@ def test_closed_attempt_does_not_acknowledge_unaccepted_result(monkeypatch):
 def test_signed_approval_rejects_changed_bytes(monkeypatch, tmp_path):
     path = tmp_path / "artifact"
     path.write_bytes(b"changed content")
-    monkeypatch.setattr(package_api.storage, "artifact_path", lambda _: path)
+    monkeypatch.setattr(package_api.storage, "artifact_path", lambda *_: path)
     for name in ("find_version", "find_package", "record_approval"):
         monkeypatch.setattr(package_api, name, Mock())
     db = Mock()
-    db.get.return_value = SimpleNamespace(signature="verified", sha256="0" * 64)
+    db.get.return_value = SimpleNamespace(signature="verified", sha256="0" * 64, storage_key=None)
     with pytest.raises(HTTPException, match="package_approval_hash_mismatch"):
         package_api.approve_version(uuid4(), uuid4(), None, db, None)
     package_api.record_approval.assert_not_called()
@@ -57,9 +57,9 @@ def test_download_maps_storage_race_to_unavailable(monkeypatch):
     path = Mock()
     path.is_file.return_value = True
     path.stat.side_effect = FileNotFoundError()
-    monkeypatch.setattr(execution_api, "artifact_path", lambda _: path)
+    monkeypatch.setattr(execution_api, "artifact_path", lambda *_: path)
     monkeypatch.setattr(execution_api, "permitted", lambda *args: (
-        None, None, None, SimpleNamespace(id=uuid4()), SimpleNamespace(size_bytes=12), None, None,
+        None, None, None, SimpleNamespace(id=uuid4()), SimpleNamespace(storage_key=None, size_bytes=12), None, None,
     ))
     with pytest.raises(HTTPException) as error:
         execution_api.download(uuid4(), uuid4(), None, Mock(), None)

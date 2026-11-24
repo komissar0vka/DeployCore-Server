@@ -7,6 +7,7 @@ from pydantic import Field, StringConstraints, field_validator
 from .device_schemas import Wire
 
 Title = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160, pattern=r"^[^\x00-\x1f\x7f]+$")]
+Category = Annotated[str, StringConstraints(strip_whitespace=True, max_length=160, pattern=r"^[^\x00-\x1f\x7f]*$")]
 Description = Annotated[str, StringConstraints(max_length=4000, pattern=r"^[^\x00]*$")]
 Arg = Annotated[str, StringConstraints(max_length=1024, pattern=r"^[^\x00-\x1f\x7f]*$")]
 ExitCode = Annotated[int, Field(strict=True, ge=0, le=2**32 - 1)]
@@ -16,6 +17,7 @@ class PackageInput(Wire):
     name: Title
     publisher: Title
     description: Description = ""
+    category: Category = ""
 
 
 class PackagePatch(Wire):
@@ -23,7 +25,9 @@ class PackagePatch(Wire):
     publisher: Title | None = None
     description: Description | None = None
 
-    @field_validator("name", "publisher", "description")
+    category: Category | None = None
+
+    @field_validator("name", "publisher", "description", "category")
     @classmethod
     def reject_explicit_null(cls, value):
         if value is None:
@@ -109,6 +113,8 @@ class ManualApproval(Wire):
 
 class VersionView(VersionInput):
     id: UUID
+    editable: bool
+    revision: int
     approved_at: datetime | None
     approved_by: UUID | None
     approval_kind: Literal["authenticode", "manual"] | None
@@ -116,10 +122,47 @@ class VersionView(VersionInput):
     artifact: ArtifactView | None
 
 
+class PackageListItem(PackageView):
+    can_deploy: bool
+
+
 class PackagePage(Wire):
-    items: list[PackageView]
+    items: list[PackageListItem]
     total: int
 
 
 class PackageDetail(PackageView):
     versions: list[VersionView]
+
+
+class IntakeView(Wire):
+    id: UUID
+    filename: str
+    size_bytes: int
+    sha256: str
+    signature: Literal["verified", "unverified"]
+    installer: Literal["msi", "exe"]
+    architecture: Literal["x64", "x86"]
+    name: str | None = None
+    publisher: str | None = None
+    version: str | None = None
+    product_code: UUID | None = None
+    family: Literal["inno", "nsis", "installshield", "installshield_basic_msi"] | None = None
+    install_args: list[Arg] = Field(default_factory=list)
+    uninstall_args: list[Arg] | None = None
+
+
+class IntakeSave(Wire):
+    package: PackageInput
+    version: VersionInput
+
+
+class IntakeSaved(Wire):
+    package: PackageView
+    version: VersionView
+
+
+class PackageHistoryEvent(Wire):
+    action: str
+    created_at: datetime
+    actor: str | None

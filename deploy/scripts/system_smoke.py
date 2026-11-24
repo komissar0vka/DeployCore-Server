@@ -85,6 +85,8 @@ check("/settings", {401})
 check("/auth/login", {403}, method="POST", data=credentials("admin"), origin=None)
 admin_cookie, csrf, admin = login("ADMIN")
 assert admin["role"] == "super_admin"
+check("/system/events", {401})
+assert check("/system/events", {200}, cookie=admin_cookie)[1][-1]["kind"] == "started"
 assert check("/users", {200}, cookie=admin_cookie)[1] == [admin]
 check(f'/users/{admin["id"]}/role', {409}, method="PATCH", cookie=admin_cookie, csrf=csrf, data={"role": "viewer"})
 _, user, _ = check(
@@ -94,6 +96,7 @@ _, user, _ = check(
 check("/users", {409}, method="POST", cookie=admin_cookie, csrf=csrf,
       data={**credentials("OPERATOR"), "role": "viewer"})
 operator_cookie, operator_csrf, user_view = login("operator")
+check("/system/events", {403}, cookie=operator_cookie)
 assert user_view["role"] == "viewer"
 assert check("/settings", {200}, cookie=admin_cookie)[1]["agent_url"].rstrip("/") == setup["agent_url"]
 settings = {

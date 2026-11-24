@@ -65,6 +65,7 @@ def create_preview(data: PreviewInput, request: Request, db: Db, actor: Operator
         select(PackageDetectionRule).join(SoftwareVersion, SoftwareVersion.id == PackageDetectionRule.version_id)
         .join(SoftwarePackage, SoftwarePackage.id == SoftwareVersion.package_id)
         .where(PackageDetectionRule.version_id == data.version_id, SoftwarePackage.archived_at.is_(None))
+        .with_for_update(read=True, of=SoftwarePackage)
     )
     if rule is None:
         raise HTTPException(404, "package_version_not_found")

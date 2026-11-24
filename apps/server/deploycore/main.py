@@ -14,19 +14,24 @@ from .agent_package_api import router as agent_package_router
 from .device_api import router as device_router
 from .database import create_database_engine
 from .health import router as health_router
+from .group_api import router as group_router
 from .execution_api import router as execution_router
 from .detection_api import router as detection_router
 from .job_api import router as job_router
 from .license_api import router as license_router
 from .package_api import router as package_router
 from .system_api import router as system_router
+from .runtime_events import RuntimeEvents, router as runtime_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     database = create_database_engine()
     app.state.database = database
-    cloud_task = asyncio.create_task(poll(database))
+    events = RuntimeEvents()
+    events.record("started")
+    app.state.runtime_events = events
+    cloud_task = asyncio.create_task(poll(database, lambda: events.record("cloud_check_failed")))
     try:
         yield
     finally:
@@ -46,7 +51,9 @@ app = FastAPI(
 )
 app.include_router(health_router)
 app.include_router(system_router)
+app.include_router(runtime_router)
 app.include_router(device_router)
+app.include_router(group_router)
 app.include_router(agent_package_router)
 app.include_router(package_router)
 app.include_router(job_router)
@@ -58,7 +65,15 @@ app.add_middleware(AgentBodyLimit)
 
 @app.middleware("http")
 async def prevent_caching(request: Request, call_next):
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        route = getattr(request.scope.get("route"), "path", None)
+        request.app.state.runtime_events.record("http_error", status=500, route=route)
+        raise
+    if response.status_code >= 500:
+        route = getattr(request.scope.get("route"), "path", None)
+        request.app.state.runtime_events.record("http_error", status=response.status_code, route=route)
     if request.url.path.startswith("/api/v1/"):
         response.headers["Cache-Control"] = "no-store"
         expiry = getattr(request.state, "session_expiry", None)

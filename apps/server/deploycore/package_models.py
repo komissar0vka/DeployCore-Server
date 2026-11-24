@@ -16,13 +16,14 @@ class SoftwarePackage(Base):
     name: Mapped[str] = mapped_column(String(160))
     publisher: Mapped[str] = mapped_column(String(160))
     description: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(160), server_default="")
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class SoftwareVersion(Base):
     __tablename__ = "software_versions"
     __table_args__ = (
-        UniqueConstraint("package_id", "version", "architecture", name="package_version_identity"),
+        UniqueConstraint("package_id", "version", "architecture", "revision", name="package_version_identity"),
         CheckConstraint(
             "(approved_at IS NULL AND approved_by IS NULL AND approval_kind IS NULL AND approved_sha256 IS NULL) OR "
             "(approved_at IS NOT NULL AND approved_by IS NOT NULL AND approval_kind IS NOT NULL "
@@ -39,6 +40,7 @@ class SoftwareVersion(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     package_id: Mapped[UUID] = mapped_column(ForeignKey("software_packages.id"))
     version: Mapped[str] = mapped_column(String(80))
+    revision: Mapped[int] = mapped_column(server_default="1")
     architecture: Mapped[str] = mapped_column(String(3))
     installer: Mapped[str] = mapped_column(String(3))
     min_windows_build: Mapped[int | None]
@@ -73,6 +75,7 @@ class PackageArtifact(Base):
     )
 
     version_id: Mapped[UUID] = mapped_column(ForeignKey("software_versions.id"), primary_key=True)
+    storage_key: Mapped[UUID | None]
     filename: Mapped[str] = mapped_column(String(180))
     size_bytes: Mapped[int] = mapped_column(BigInteger)
     sha256: Mapped[str] = mapped_column(String(64))
@@ -88,3 +91,12 @@ def artifact_approved(version: SoftwareVersion, artifact: PackageArtifact | None
         and (version.approval_kind, artifact.signature)
         in {("manual", "unverified"), ("authenticode", "verified")}
     )
+
+
+class PackageIntake(Base):
+    __tablename__ = "package_intakes"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    owner_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    metadata_json: Mapped[dict] = mapped_column(JSONB)

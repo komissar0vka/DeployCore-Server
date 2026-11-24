@@ -25,8 +25,16 @@ def storage_root() -> Path:
     return Path(os.getenv("DEPLOYCORE_PACKAGE_DIR", "/var/lib/deploycore/packages"))
 
 
-def artifact_path(version_id: UUID) -> Path:
-    return storage_root() / str(version_id)
+def artifact_path(version_id: UUID, storage_key: UUID | None = None) -> Path:
+    return storage_root() / str(storage_key or version_id)
+
+
+def sync_directory():
+    descriptor = os.open(storage_root(), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 @contextmanager

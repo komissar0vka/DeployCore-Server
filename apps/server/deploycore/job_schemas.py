@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import Field, field_validator
+from pydantic import AwareDatetime, Field, field_validator
 
 from .device_schemas import Wire
 from .package_schemas import DetectionState
@@ -20,12 +20,11 @@ Diagnostic = Literal["download_failed", "hash_mismatch", "insufficient_space", "
                      "operator_resolved", "detection_mismatch", "reboot_timeout", "device_removed", "device_retired"]
 
 
-class JobInput(Wire):
+class JobTargets(Wire):
     mode: Mode = "transport_only"
-    version_id: UUID
-    operation: Operation
     device_ids: Annotated[list[UUID], Field(min_length=1, max_length=100)]
     request_id: UUID
+    not_before: AwareDatetime | None = None
 
     @field_validator("device_ids")
     @classmethod
@@ -33,6 +32,22 @@ class JobInput(Wire):
         if len(set(value)) != len(value):
             raise ValueError("device IDs must be unique")
         return value
+
+
+class JobInput(JobTargets):
+    version_id: UUID
+    operation: Operation
+
+
+class BatchInput(JobTargets):
+    version_ids: Annotated[list[UUID], Field(min_length=2, max_length=20)]
+
+    @field_validator("version_ids")
+    @classmethod
+    def distinct_versions(cls, values):
+        if len(set(values)) != len(values):
+            raise ValueError("version IDs must be unique")
+        return values
 
 
 class JobView(Wire):
@@ -43,7 +58,12 @@ class JobView(Wire):
     version: str
     operation: Operation
     created_at: datetime
+    not_before: datetime | None = None
     counts: dict[TargetState, int]
+
+
+class BatchView(Wire):
+    items: list[JobView]
 
 
 class JobPage(Wire):

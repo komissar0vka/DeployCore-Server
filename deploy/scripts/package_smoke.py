@@ -1,9 +1,13 @@
 """Exercise catalog RBAC, binary transfer and signing using the isolated stack."""
 import hashlib
 import json
+import os
+import secrets
 import subprocess
 import tempfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, build_opener, HTTPSHandler, ProxyHandler
@@ -40,7 +44,7 @@ def exercise_packages(check, login, sql, compose, base, context, admin):
             assert response.status == expected, (method, url, response.status, data[:500])
             return data, response.headers
 
-    def upload(url, name, payload, expected, identity=operator):
+    def upload(url, name, payload, expected, identity=operator, method='PUT', **query):
         if isinstance(payload, bytes):
             size = len(payload)
             chunks = (payload[i:i + 65536] for i in range(0, size, 65536))
@@ -52,7 +56,7 @@ def exercise_packages(check, login, sql, compose, base, context, admin):
         # Exercise both fixed length (large fixture) and chunked forwarding (small probes).
         if not isinstance(payload, bytes):
             headers["Content-Length"] = str(size)
-        data, _ = request("/api/v1" + url + "?" + urlencode({"filename": name}), "PUT",
+        data, _ = request("/api/v1" + url + "?" + urlencode({"filename": name, **query}), method,
                           body=chunks, headers=headers, expected=expected)
         return json.loads(data)
 
@@ -120,6 +124,58 @@ def exercise_packages(check, login, sql, compose, base, context, admin):
         msi = create_version(path, "1.1", "msi")
         msi_path = f'{path}/versions/{msi["id"]}/artifact'
         assert upload(msi_path, "fixture.msi", directory / "fixture.msi", 201)["signature"] == "unverified"
+        check("/licenses/updates/stable", {200}, **operator)
+        for index, sample in enumerate([directory / "fixture.msi", *sorted(Path(os.environ.get("PACKAGE_EXE_FIXTURES", ".")).glob("WinScan2PDF*.exe"))]):
+            intake = upload("/packages/intakes", sample.name, sample, 201, method="POST")
+            assert intake["sha256"] == hashlib.sha256(sample.read_bytes()).hexdigest()
+            if sample.suffix == ".exe":
+                assert intake["architecture"] == "x86"
+                assert intake["install_args"] == []
+            else:
+                assert intake["product_code"] and intake["install_args"] == ["/qn", "/norestart"]
+            intake_path = "/packages/intakes/" + intake["id"] + "/save"
+            staged_version = {
+                "version": "1.0", "architecture": intake["architecture"], "installer": intake["installer"],
+                "detection": {"kind": "registry_software", "display_name": "Intake fixture", "version": "1.0"},
+            }
+            payload = {"package": {"name": f"Intake fixture {index}", "publisher": "Fixtures", "category": "Diagnostics"},
+                       "version": staged_version}
+            check(intake_path, {403}, method="POST", data=payload, **viewer)
+            check(intake_path, {404}, method="POST", data=payload, **admin)
+            saved = check(intake_path, {201}, method="POST", data=payload, **operator)[1]
+            check(intake_path, {404}, method="POST", data=payload, **operator)
+            revision = f'/packages/{saved["package"]["id"]}/versions/{saved["version"]["id"]}'
+            check(revision, {200}, method="PUT", data={**staged_version, "install_args": ["/qn"]}, **operator)
+            if intake["signature"] == "verified":
+                check(revision + "/approve", {200}, method="POST", **operator)
+            else:
+                check(revision + "/approve-manual", {200}, method="POST", data={"sha256": intake["sha256"]}, **admin)
+            frozen = check(revision + "/revisions", {201}, method="POST", data=staged_version, **operator)[1]
+            assert frozen["revision"] == 2 and frozen["approved_at"] is None and frozen["artifact"]["sha256"] == intake["sha256"]
+            replaced = upload(revision + "/artifact", sample.name, sample, 201, replace="true")
+            assert replaced["sha256"] == intake["sha256"]
+            details = check(f'/packages/{saved["package"]["id"]}', {200}, **operator)[1]
+            assert details["category"] == "Diagnostics"
+            assert all(item["approved_at"] is None for item in details["versions"])
+            request("/api/v1" + revision + "/artifact", headers={"Cookie": operator_cookie})
+            package_path = f'/packages/{saved["package"]["id"]}'
+            changes = check(package_path + "/history", {200}, **viewer)[1]
+            assert {event["action"] for event in changes} >= {
+                "package_created", "package_version_changed", "package_version_revised", "package_artifact_replaced",
+            }
+            duplicate = check(package_path + "/duplicate", {201}, method="POST", **operator, data={
+                "name": f"Copy of intake {index}", "publisher": "Fixtures", "category": "Diagnostics",
+            })[1]
+            duplicate_path = '/packages/' + duplicate["id"]
+            copied = check(duplicate_path, {200}, **operator)[1]["versions"]
+            assert len(copied) == 2 and all(v["approved_at"] is None for v in copied)
+            check(duplicate_path + "/versions/" + copied[0]["id"], {204}, method="DELETE", **operator)
+            check(duplicate_path + "/purge", {204}, method="DELETE", **operator)
+            check(duplicate_path, {404}, **operator)
+            request("/api/v1" + revision + "/artifact", headers={"Cookie": operator_cookie})
+            check(package_path, {204}, method="DELETE", **operator)
+            check(package_path + "/purge", {204}, method="DELETE", **operator)
+
 
         subprocess.run([*compose, "cp", str(exe), "server:/tmp/catalog-test.exe"], check=True, stdout=subprocess.DEVNULL)
         subprocess.run([*compose, "cp", str(directory / "fixture.msi"), "server:/tmp/catalog-test.msi"], check=True, stdout=subprocess.DEVNULL)
@@ -173,7 +229,47 @@ def exercise_packages(check, login, sql, compose, base, context, admin):
     exercise_deployments(check, login, sql, compose, signed["id"], admin)
     clear_managed_fixture_devices(check, admin)
     assert stored[version["id"]] == manual
+    scheduler_id, scheduler_key = str(uuid4()), secrets.token_urlsafe(32)
+    enrollment = check("/enrollment-tokens", {201}, method="POST", **operator,
+                       data={"label": "Batch test", "max_uses": 1})[1]["token"]
+    check("/agent/enroll", {200}, method="POST", origin=None, data={
+        "installation_id": scheduler_id, "credential": scheduler_key, "enrollment_token": enrollment,
+        "heartbeat": {"hostname": "WIN-BATCH", "network_name": "WORKGROUP", "domain_joined": False,
+                      "ips": [], "os_version": "Windows 10.0.26100", "agent_version": "0.3.7", "uptime_seconds": 120},
+    })
+    batch_path = "/deployments/batch"
+    not_before = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    batch = {"version_ids": [signed["id"], composite["id"]], "device_ids": [scheduler_id],
+             "request_id": str(uuid4()), "not_before": not_before}
+    rejected = {**batch, "version_ids": [signed["id"], str(uuid4())]}
+    check(batch_path, {409}, method="POST", data=rejected, **operator)
+    assert check(f"/deployments?device_id={scheduler_id}", {200}, **operator)[1]["total"] == 0
+    jobs = check(batch_path, {201}, method="POST", data=batch, **operator)[1]["items"]
+    assert len(jobs) == 2 and all(datetime.fromisoformat(job["not_before"]) == datetime.fromisoformat(not_before) for job in jobs)
+    replay = check(batch_path, {201}, method="POST", data=batch, **operator)[1]["items"]
+    assert [job["id"] for job in jobs] == [job["id"] for job in replay]
+    check(batch_path, {409}, method="POST", data={**batch, "not_before": None}, **operator)
+    agent = {"method": "POST", "origin": None, "extra": {"Authorization": f"Bearer {scheduler_key}"}}
+    poll_path = f"/agent/{scheduler_id}/jobs/poll"
+    assert check(poll_path, {200}, **agent)[1]["assignment"] is None
+    for job in jobs:
+        sql(f"UPDATE deployment_jobs SET not_before=now() - '1 second'::interval WHERE id='{job['id']}'")
+    assert check(poll_path, {200}, **agent)[1]["assignment"]
+    for job in jobs:
+        check(f"/deployments/{job['id']}/cancel", {200}, method="POST", **operator)
+    check(f"/devices/{scheduler_id}/retire", {204}, method="POST", **admin)
+    print("Scheduled batch: rollback, idempotency, delayed dispatch and cancellation passed")
     exercise_execution(check, login, sql, base, context, version["id"], composite["id"], group, admin)
+    stored_version = next(item for item in check(path, {200}, **operator)[1]["versions"] if item["id"] == version["id"])
+    assert not stored_version["editable"]
+    config = {key: stored_version[key] for key in (
+        "version", "architecture", "installer", "min_windows_build", "install_args",
+        "uninstall_args", "detection", "timeout_seconds", "success_codes", "reboot_required"
+    )}
+    check(version_path, {409}, method="PUT", data=config, **operator)
+    check(version_path, {409}, method="DELETE", **operator)
+    check(path + "/purge", {409}, method="DELETE", **operator)
+
     sql(f"""
         DO $$
         BEGIN

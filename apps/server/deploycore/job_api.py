@@ -1,8 +1,10 @@
+import hashlib
+import json
 import os
 import re
 from datetime import datetime, timedelta
 from typing import Annotated, Literal
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, or_, select, text
@@ -10,6 +12,7 @@ from sqlalchemy import func, or_, select, text
 from . import job_schemas as wire
 from .device_api import AgentDevice
 from .device_models import Agent, Device
+from .job_models import DeploymentBatch
 from .job_models import DeploymentAttempt as Attempt, DeploymentEvent as Event, DeploymentJob as Job, DeploymentTarget as Target
 from .models import User
 from .package_models import PackageArtifact, PackageDetectionRule, SoftwarePackage, SoftwareVersion, artifact_approved
@@ -97,7 +100,7 @@ def counts_for(db: Db, ids: list[UUID]) -> dict:
 
 def view(job: Job, version: str, name: str, counts: dict) -> wire.JobView:
     return wire.JobView(id=job.id, version_id=job.version_id, package_name=name, version=version,
-                        operation=job.operation, mode=job.mode, created_at=job.created_at, counts=counts)
+                        operation=job.operation, mode=job.mode, created_at=job.created_at, not_before=job.not_before, counts=counts)
 
 
 def get_view(db: Db, job_id: UUID) -> wire.JobView:
@@ -115,6 +118,12 @@ def last_attempt(db: Db, target_id: UUID) -> Attempt | None:
 
 @router.post("/deployments", tags=["Deployments"], status_code=201)
 def create_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) -> wire.JobView:
+    result = stage_job(data, request, db, actor)
+    db.commit()
+    return result
+
+
+def stage_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) -> wire.JobView:
     if data.mode == "execute_v1" and data.operation == "uninstall" and Permission.MANAGE_REMOVALS not in PERMISSIONS[Role(actor.role)]:
         raise HTTPException(403, "permission_denied")
     db.execute(text("SELECT pg_advisory_xact_lock(4, hashtext(:key))"),
@@ -122,11 +131,15 @@ def create_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) -
     existing = db.scalar(select(Job).where(Job.created_by == actor.id, Job.request_id == data.request_id))
     if existing is not None:
         device_ids = set(db.scalars(select(Target.device_id).where(Target.job_id == existing.id)))
-        if existing.version_id != data.version_id or existing.operation != data.operation or existing.mode != data.mode or device_ids != set(data.device_ids):
+        if (existing.version_id != data.version_id or existing.operation != data.operation
+                or existing.mode != data.mode or existing.not_before != data.not_before or device_ids != set(data.device_ids)):
             raise HTTPException(409, "deployment_request_conflict")
-        result = get_view(db, existing.id)
-        db.commit()
-        return result
+        return get_view(db, existing.id)
+
+    if data.not_before is not None:
+        now = clock(db)
+        if not now < data.not_before <= now + timedelta(days=365):
+            raise HTTPException(422, "deployment_schedule_invalid")
 
     # Device operations and agent requests acquire the device lock before target/package locks.
     devices = list(db.execute(
@@ -150,7 +163,7 @@ def create_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) -
     artifact = db.get(PackageArtifact, data.version_id)
     if not artifact_approved(version, artifact):
         raise HTTPException(409, "deployment_version_unavailable")
-    if not artifact_path(data.version_id).is_file():
+    if not artifact_path(data.version_id, artifact.storage_key).is_file():
         raise HTTPException(503, "package_storage_unavailable")
     if data.operation == "uninstall" and version.uninstall_args is None:
         raise HTTPException(409, "deployment_uninstall_unavailable")
@@ -166,7 +179,7 @@ def create_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) -
         raise HTTPException(422, "deployment_agent_incompatible")
 
     job = Job(version_id=data.version_id, artifact_sha256=artifact.sha256, operation=data.operation,
-              created_by=actor.id, request_id=data.request_id, mode=data.mode)
+              created_by=actor.id, request_id=data.request_id, mode=data.mode, not_before=data.not_before)
     db.add(job)
     db.flush()
     db.add_all(Target(job_id=job.id, device_id=device_id) for device_id, _ in devices)
@@ -174,9 +187,37 @@ def create_job(data: wire.JobInput, request: Request, db: Db, actor: Operator) -
     audit(db, request, "deployment_created", actor=actor,
           details={"job_id": str(job.id), "version_id": str(job.version_id), "operation": job.operation,
                    "target_count": str(len(devices)), "mode": data.mode})
-    result = view(job, version.version, package.name, {"queued": len(devices)})
+    return view(job, version.version, package.name, {"queued": len(devices)})
+
+
+@router.post("/deployments/batch", tags=["Deployments"], status_code=201)
+def create_batch(data: wire.BatchInput, request: Request, db: Db, actor: Operator) -> wire.BatchView:
+    body = data.model_dump(mode="json", exclude={"request_id"})
+    body["device_ids"] = sorted(body["device_ids"])
+    body["version_ids"] = sorted(body["version_ids"])
+    fingerprint = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+    db.execute(text("SELECT pg_advisory_xact_lock(8, hashtext(:key))"),
+               {"key": f"{actor.id}:{data.request_id}"})
+    previous = db.get(DeploymentBatch, (actor.id, data.request_id))
+    if previous is not None and previous.fingerprint != fingerprint:
+        raise HTTPException(409, "deployment_request_conflict")
+    if previous is None:
+        # All jobs share their device set. Lock the device set before the package set in stable order.
+        db.execute(select(Device.id).where(Device.id.in_(data.device_ids)).order_by(Device.id).with_for_update())
+        package_ids = select(SoftwareVersion.package_id).where(SoftwareVersion.id.in_(data.version_ids))
+        db.execute(select(SoftwarePackage.id).where(SoftwarePackage.id.in_(package_ids))
+                   .order_by(SoftwarePackage.id).with_for_update())
+        db.add(DeploymentBatch(created_by=actor.id, request_id=data.request_id, fingerprint=fingerprint))
+    items = [
+        stage_job(
+            wire.JobInput(mode=data.mode, version_id=version_id, operation="install", device_ids=data.device_ids,
+                          request_id=uuid5(data.request_id, str(version_id)), not_before=data.not_before),
+            request, db, actor,
+        )
+        for version_id in sorted(data.version_ids)
+    ]
     db.commit()
-    return result
+    return wire.BatchView(items=items)
 
 
 def job_matches_scope(scope: wire.JobScope, now: datetime):
@@ -344,8 +385,9 @@ def poll(request: Request, db: Db, device: AgentDevice) -> wire.PollReply:
         select(Target).join(Job, Job.id == Target.job_id)
         .where(Target.device_id == device.id, Target.state == "queued", Job.mode.in_(("transport_only", "execute_v1") if execute else ("transport_only",)))
         .join(PackageDetectionRule, PackageDetectionRule.version_id == Job.version_id)
+        .where(or_(Job.not_before.is_(None), Job.not_before <= func.now()))
         .where(or_(Job.mode == "transport_only", PackageDetectionRule.kind.not_in(GROUP_KINDS)) if not extended else True)
-        .order_by(Job.created_at, Job.id).limit(1).with_for_update(of=Target)
+        .order_by(func.coalesce(Job.not_before, Job.created_at), Job.id).limit(1).with_for_update(of=Target)
     )
     if target is None:
         db.commit()

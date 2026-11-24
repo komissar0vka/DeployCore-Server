@@ -5,3 +5,4 @@ SQLAlchemy==2.0.48
 uvicorn==0.42.0
 alembic==1.20.1
 argon2-cffi==25.1.0
+pefile==2024.8.26

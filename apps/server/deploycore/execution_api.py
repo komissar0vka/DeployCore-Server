@@ -67,7 +67,7 @@ def manifest(target_id: UUID, attempt_id: UUID, request: Request, db: Db, device
 @router.get("/agent/{device_id}/jobs/{target_id}/artifact", tags=["Agent Execution"], response_class=FileResponse)
 def download(target_id: UUID, attempt_id: UUID, request: Request, db: Db, device: AgentDevice):
     _, _, _, version, artifact, _, _ = permitted(db, device, target_id, attempt_id, request)
-    path = artifact_path(version.id)
+    path = artifact_path(version.id, artifact.storage_key)
     try:
         if not path.is_file() or path.stat().st_size != artifact.size_bytes:
             raise HTTPException(503, "package_storage_unavailable")

@@ -3,17 +3,18 @@ import os
 from subprocess import SubprocessError
 from datetime import UTC, datetime
 from typing import Annotated, Literal
+from urllib.error import HTTPError
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import AwareDatetime, HttpUrl
+from pydantic import AwareDatetime, HttpUrl, StringConstraints
 from sqlalchemy import func, select
 
 from . import cloud_link, licensing
 from .device_models import Device
 from .device_schemas import Wire
 from .license_models import LicenseState
-from .licensing_contracts import SignedGrant
+from .licensing_contracts import PublicKey, SignedGrant
 from .models import User
 from .security import Db, Permission, audit, require
 
@@ -134,16 +135,52 @@ class PublishedRelease(Wire):
 
 class ReleaseCatalog(Wire):
     current_version: str
+    status: Literal["connected", "not_configured", "unavailable"]
     releases: list[PublishedRelease]
 
 
 @router.get("/updates/{channel}")
 def available_updates(channel: Literal["stable", "beta"], actor: Reader) -> ReleaseCatalog:
+    if not cloud_link.CONFIG.is_file():
+        return ReleaseCatalog(current_version=cloud_link.VERSION, status="not_configured", releases=[])
     try:
         cloud = cloud_link.connection()
         manifest = cloud_link.signed_response(cloud.request(f"/v1/releases/{channel}"), "release", cloud.release_key)
         if manifest["channel"] != channel or datetime.fromisoformat(manifest["expires_at"]) <= datetime.now(UTC):
             raise ValueError("wrong_release_channel")
-        return ReleaseCatalog(current_version=cloud_link.VERSION, releases=manifest["releases"])
+        return ReleaseCatalog(current_version=cloud_link.VERSION, status="connected", releases=manifest["releases"])
     except (OSError, ValueError, TypeError, KeyError):
-        raise HTTPException(503, "cloud_updates_unavailable") from None
+        return ReleaseCatalog(current_version=cloud_link.VERSION, status="unavailable", releases=[])
+
+
+class CloudConnectionInput(Wire):
+    origin: HttpUrl
+    token: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{43}$")]
+    license_key: PublicKey
+    release_key: PublicKey
+    ca: Annotated[str, StringConstraints(max_length=65536)] | None = None
+
+
+@router.post("/cloud")
+def activate_cloud(data: CloudConnectionInput, request: Request, db: Db, actor: SystemAdmin) -> LicenseView:
+    origin = data.origin
+    if origin.scheme != "https" or origin.path != "/" or origin.query or origin.fragment or origin.username or origin.password:
+        raise HTTPException(422, "cloud_origin_invalid")
+    settings = data.model_dump(mode="json")
+    settings["origin"] = str(origin).removesuffix("/")
+    try:
+        cloud_link.configure(settings, request.app.state.database)
+    except HTTPError as exc:
+        if exc.code in (401, 403, 409):
+            raise HTTPException(422, "cloud_activation_rejected") from exc
+        raise HTTPException(503, "cloud_activation_unavailable") from exc
+    except (OSError, SubprocessError, KeyError, TypeError) as exc:
+        raise HTTPException(503, "cloud_activation_unavailable") from exc
+    except ValueError as exc:
+        if str(exc) in {"cloud_keys_mismatch", "invalid_cloud_ca", "cloud_license_unavailable"}:
+            raise HTTPException(422, str(exc)) from exc
+        raise HTTPException(503, "cloud_activation_unavailable") from exc
+    result = effective(state_for(db), managed_count(db))
+    audit(db, request, "cloud_activated", actor=actor, details={"instance_id": str(result.instance_id)})
+    db.commit()
+    return result
