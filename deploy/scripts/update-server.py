@@ -101,6 +101,9 @@ def extract(archive, source):
             target.parent.mkdir(parents=True, exist_ok=True)
             with bundle.extractfile(member) as data, target.open("xb") as output:
                 shutil.copyfileobj(data, output)
+            target.chmod(0o755 if member.mode & 0o111 else 0o644)
+    for directory, _, _ in os.walk(source):
+        Path(directory).chmod(0o755)
     if not all((source / name).is_file() for name in FILES):
         raise ValueError("Incomplete release archive")
     if (source / "deploy/compose.yaml").read_bytes() != (DEPLOY / "compose.yaml").read_bytes():
@@ -154,7 +157,15 @@ def install(channel, version):
     release = release_plan(channel, version)
     if not release:
         raise ValueError("Signed manifest does not include requested version")
-    if shutil.disk_usage(STATE).free < max(2 * 1024**3, release["size_bytes"] * 5):
+    database_size = int(compose("exec", "-T", "db", "sh", "-c",
+        'exec psql -At -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT pg_database_size(current_database())"',
+        capture_output=True, text=True).stdout)
+    volume_sizes = [compose("exec", "-T", service, "du", "-sk", path, capture_output=True, text=True).stdout
+                    for service, path in (("server", "/var/lib/deploycore"), ("web", "/etc/deploycore/tls"))]
+    backup_space = database_size * 2 + sum(int(size.split()[0]) * 1024 for size in volume_sizes)
+    docker_directory = Path(subprocess.check_output(["docker", "info", "--format", "{{.DockerRootDir}}"], text=True).strip())
+    available = min(shutil.disk_usage(STATE).free, shutil.disk_usage(docker_directory).free)
+    if available < 1024**3 + backup_space + release["size_bytes"] * 5:
         raise ValueError("Insufficient free space to build and retain backup")
     suffix = uuid4().hex[:12]
     work = STATE / (version + "-" + suffix)

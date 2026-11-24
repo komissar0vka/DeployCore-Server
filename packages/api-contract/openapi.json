@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "DeployCore",
-    "version": "1.0.0-beta.2"
+    "version": "1.0.0-beta.3"
   },
   "paths": {
     "/api/health/live": {
@@ -2608,7 +2608,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseCatalog"
+                }
               }
             }
           },
@@ -4975,6 +4977,44 @@
         ],
         "title": "PublicUser"
       },
+      "PublishedRelease": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "archive_url": {
+            "type": "string",
+            "maxLength": 2083,
+            "minLength": 1,
+            "format": "uri",
+            "title": "Archive Url"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Published At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "archive_url",
+          "sha256",
+          "size_bytes",
+          "published_at"
+        ],
+        "title": "PublishedRelease"
+      },
       "RebootResult": {
         "properties": {
           "attempt_id": {
@@ -5037,6 +5077,28 @@
           "version"
         ],
         "title": "RegistrySoftware"
+      },
+      "ReleaseCatalog": {
+        "properties": {
+          "current_version": {
+            "type": "string",
+            "title": "Current Version"
+          },
+          "releases": {
+            "items": {
+              "$ref": "#/components/schemas/PublishedRelease"
+            },
+            "type": "array",
+            "title": "Releases"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "current_version",
+          "releases"
+        ],
+        "title": "ReleaseCatalog"
       },
       "Resolve": {
         "properties": {

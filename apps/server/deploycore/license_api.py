@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import AwareDatetime, HttpUrl
 from sqlalchemy import func, select
 
 from . import cloud_link, licensing
@@ -123,13 +124,26 @@ def import_license(data: SignedGrant, request: Request, db: Db, actor: SystemAdm
     return result
 
 
+class PublishedRelease(Wire):
+    version: str
+    archive_url: HttpUrl
+    sha256: str
+    size_bytes: int
+    published_at: AwareDatetime
+
+
+class ReleaseCatalog(Wire):
+    current_version: str
+    releases: list[PublishedRelease]
+
+
 @router.get("/updates/{channel}")
-def available_updates(channel: Literal["stable", "beta"], actor: Reader):
+def available_updates(channel: Literal["stable", "beta"], actor: Reader) -> ReleaseCatalog:
     try:
         cloud = cloud_link.connection()
         manifest = cloud_link.signed_response(cloud.request(f"/v1/releases/{channel}"), "release", cloud.release_key)
         if manifest["channel"] != channel or datetime.fromisoformat(manifest["expires_at"]) <= datetime.now(UTC):
             raise ValueError("wrong_release_channel")
-        return {"current_version": cloud_link.VERSION, "releases": manifest["releases"]}
+        return ReleaseCatalog(current_version=cloud_link.VERSION, releases=manifest["releases"])
     except (OSError, ValueError, TypeError, KeyError):
         raise HTTPException(503, "cloud_updates_unavailable") from None

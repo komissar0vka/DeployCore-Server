@@ -117,7 +117,7 @@ def cloud_contract() -> dict:
         }}
     return {
         "openapi": "3.1.0",
-        "info": {"title": "DeployCore Cloud Activation", "version": "1.0.0-beta.2",
+        "info": {"title": "DeployCore Cloud Activation", "version": "1.0.0-beta.3",
                  "description": "Proof-of-possession activation and recurring Cloud grant checks."},
         "paths": paths,
         "components": {
