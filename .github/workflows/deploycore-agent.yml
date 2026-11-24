@@ -109,6 +109,24 @@ jobs:
             go test -run '^TestWinScanPortableLifecycle$' -count=1 -timeout 2m
             if ($LASTEXITCODE -ne 0) { throw 'Portable lifecycle failed' }
           } finally { Pop-Location }
+      - name: Sign the disposable MSI with an isolated runner certificate
+        shell: pwsh
+        timeout-minutes: 3
+        working-directory: agent-artifact
+        run: |
+          $signed = Join-Path (Get-Location) 'migration-signed.msi'
+          Copy-Item -LiteralPath 'migration-current.msi' -Destination $signed
+          $certificate = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=DeployCore Hosted Test' -CertStoreLocation Cert:\CurrentUser\My
+          foreach ($storeName in @('Root','TrustedPublisher')) {
+            $store = [Security.Cryptography.X509Certificates.X509Store]::new($storeName,'LocalMachine')
+            $store.Open('ReadWrite')
+            try { $store.Add($certificate) } finally { $store.Close() }
+          }
+          $signature = Set-AuthenticodeSignature -LiteralPath $signed -Certificate $certificate -HashAlgorithm SHA256
+          if ($signature.Status -ne 'Valid') { throw "Hosted MSI signing failed: $($signature.Status)" }
+          "DEPLOYCORE_TEST_MIGRATION_SIGNED=$signed" >> $env:GITHUB_ENV
+          $pin = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($certificate.RawData))
+          "DEPLOYCORE_TEST_PUBLISHER_SHA256=$pin" >> $env:GITHUB_ENV
       - name: Exercise MSI lifecycle on Windows
         shell: pwsh
         working-directory: agent-artifact
@@ -125,18 +143,6 @@ jobs:
           $env:DEPLOYCORE_TEST_MIGRATION_PREVIOUS = Join-Path (Get-Location) 'migration-previous.msi'
           $env:DEPLOYCORE_TEST_MIGRATION_CURRENT = Join-Path (Get-Location) 'migration-current.msi'
           $env:DEPLOYCORE_TEST_MIGRATION_SCRIPT = Join-Path (Get-Location) 'upgrade-agent.ps1'
-          $signed = Join-Path (Get-Location) 'migration-signed.msi'
-          Copy-Item -LiteralPath $env:DEPLOYCORE_TEST_MIGRATION_CURRENT -Destination $signed
-          $certificate = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=DeployCore Hosted Test' -CertStoreLocation Cert:\CurrentUser\My
-          foreach ($storeName in @('Root','TrustedPublisher')) {
-            $store = [Security.Cryptography.X509Certificates.X509Store]::new($storeName,'CurrentUser')
-            $store.Open('ReadWrite')
-            try { $store.Add($certificate) } finally { $store.Close() }
-          }
-          $signature = Set-AuthenticodeSignature -LiteralPath $signed -Certificate $certificate -HashAlgorithm SHA256
-          if ($signature.Status -ne 'Valid') { throw "Hosted MSI signing failed: $($signature.Status)" }
-          $env:DEPLOYCORE_TEST_MIGRATION_SIGNED = $signed
-          $env:DEPLOYCORE_TEST_PUBLISHER_SHA256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($certificate.RawData))
           Push-Location ../apps/agent
           try {
             go test -run '^TestPackagedAgentService$' -count=1 -timeout 4m
